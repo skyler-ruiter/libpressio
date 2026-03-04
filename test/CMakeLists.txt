@@ -152,3 +152,11 @@ if(LIBPRESSIO_HAS_SZ AND LIBPRESSIO_HAS_FPZIP AND LIBPRESSIO_BUILD_MODE STREQUAL
   add_executable(test_roibin test_roibin.cc)
   target_link_libraries(test_roibin libpressio)
 endif()
+
+# FZModules basic test
+add_executable(test_fzm_basic test_fzm_basic.cc)
+target_link_libraries(test_fzm_basic PRIVATE libpressio)
+if(LIBPRESSIO_HAS_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  target_link_libraries(test_fzm_basic PRIVATE CUDA::cudart)
+endif()

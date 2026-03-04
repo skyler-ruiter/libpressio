@@ -378,6 +378,18 @@ if(LIBPRESSIO_HAS_CUSZ)
   target_link_libraries(libpressio PRIVATE CUSZ::cusz CUDA::cuda_driver CUDA::cudart)
 endif()
 
+option(LIBPRESSIO_HAS_FZMODULES "build the fzmodules plugin" OFF)
+if(LIBPRESSIO_HAS_FZMODULES)
+  # FZModules requires CUDA domain support
+  set(LIBPRESSIO_HAS_CUDA ON CACHE BOOL "Required by fzmodules" FORCE)
+  enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  find_package(FZModules REQUIRED)
+  set(LIBPRESSIO_COMPRESSORS "${LIBPRESSIO_COMPRESSORS} fzmodules")
+  libpressio_plugin_file(/compressors/fzmodules.cc)
+  target_link_libraries(libpressio PRIVATE FZMOD::fzmod CUDA::cudart)
+endif()
+
 option(LIBPRESSIO_HAS_SZ3 "build the SZ3 plugin" OFF)
 if(LIBPRESSIO_HAS_SZ3)
   set(LIBPRESSIO_COMPRESSORS "${LIBPRESSIO_COMPRESSORS} sz3")
