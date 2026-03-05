@@ -160,3 +160,12 @@ if(LIBPRESSIO_HAS_CUDA)
   find_package(CUDAToolkit REQUIRED)
   target_link_libraries(test_fzm_basic PRIVATE CUDA::cudart)
 endif()
+
+# FZModules parallel-DAG pipeline test
+# Pipeline: lorenzo -> diff:uint16 (codes) + passthrough (outlier_errors)
+add_executable(test_fzm_dag test_fzm_dag.cc)
+target_link_libraries(test_fzm_dag PRIVATE libpressio)
+if(LIBPRESSIO_HAS_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  target_link_libraries(test_fzm_dag PRIVATE CUDA::cudart)
+endif()

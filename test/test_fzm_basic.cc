@@ -18,8 +18,8 @@ static bool check(bool cond, const char* msg) {
 struct Stats {
     double max_error;
     double mse;
-    double psnr;   // dB
-    double nrmse;  // normalized by data range
+    double psnr;
+    double nrmse;
 };
 
 static Stats calculateStatistics(const float* orig, const float* restored, size_t n) {
@@ -93,7 +93,7 @@ int main() {
     // -------------------------------------------------------------------------
     pressio_options opts;
 
-    // Standard libpressio error bound — propagated to every Lorenzo stage
+    // Standard libpressio error bound
     opts.set("pressio:abs", 1e-3f);
 
     // Pipeline topology: Lorenzo(float→uint16) → Diff(uint16)

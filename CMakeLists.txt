@@ -380,7 +380,6 @@ endif()
 
 option(LIBPRESSIO_HAS_FZMODULES "build the fzmodules plugin" OFF)
 if(LIBPRESSIO_HAS_FZMODULES)
-  # FZModules requires CUDA domain support
   set(LIBPRESSIO_HAS_CUDA ON CACHE BOOL "Required by fzmodules" FORCE)
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)

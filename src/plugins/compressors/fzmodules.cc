@@ -23,9 +23,9 @@ namespace libpressio { namespace compressors { namespace fzmodules_ns {
 
 // Memory strategy mapping for FZModules Pipeline
 static const std::map<std::string, fz::MemoryStrategy> MEMORY_STRATEGIES {
-    {"preallocate", fz::MemoryStrategy::PREALLOCATE},
-    {"pipeline", fz::MemoryStrategy::PIPELINE},
-    {"minimal", fz::MemoryStrategy::MINIMAL},
+    {"preallocate", fz::MemoryStrategy::PREALLOCATE}, // speed at cost of memory usage
+    {"pipeline", fz::MemoryStrategy::PIPELINE}, // critical path preallocate and free when done
+    {"minimal", fz::MemoryStrategy::MINIMAL}, // only allocate what is needed for each stage at execution time
 };
 
 // Helper to extract keys from maps for configuration
@@ -37,24 +37,6 @@ std::vector<std::string> map_keys(std::map<std::string, T> const& map) {
         keys.push_back(i.first);
     }
     return keys;
-}
-
-// Helper to check if pointer is on GPU
-bool is_device_ptr(void* ptr) {
-    cudaPointerAttributes attrs;
-    cudaError_t err = cudaPointerGetAttributes(&attrs, ptr);
-    if(err != cudaSuccess) {
-        cudaGetLastError(); // Clear error
-        return false;
-    }
-    return (attrs.type == cudaMemoryTypeDevice);
-}
-
-// Custom deleter for CUDA memory allocated by FZModules
-void cuda_free_wrapper(void* ptr, void*) {
-    if(ptr) {
-        cudaFree(ptr);
-    }
 }
 
 // =============================================================================
@@ -111,68 +93,52 @@ public:
     fzmodules_plugin() : pipeline_(nullptr), pipeline_dirty_(true), error_bound_(1e-3f) {
         // Seed default Lorenzo params for s0
         lorenzo_params_["s0"] = LorenzoParams{};
+        cudaStreamCreate(&stream_);
     }
     
     ~fzmodules_plugin() {
-        // Pipeline uses unique_ptr, will be cleaned up automatically
+        if(stream_) cudaStreamDestroy(stream_);
     }
     
     // Copy constructor
-    fzmodules_plugin(fzmodules_plugin const& rhs) 
+    fzmodules_plugin(fzmodules_plugin const& rhs)
         : libpressio_compressor_plugin(rhs),
           pipeline_(nullptr),  // Force rebuild
-          pipeline_dirty_(true),
-          error_bound_(rhs.error_bound_),
-          memory_strategy_(rhs.memory_strategy_),
-          memory_multiplier_(rhs.memory_multiplier_),
-          stages_(rhs.stages_),
-          connections_(rhs.connections_),
-          lorenzo_params_(rhs.lorenzo_params_)
-    {}
-    
+          pipeline_dirty_(true)
+    { cudaStreamCreate(&stream_); copy_config_from(rhs); }
+
     // Move constructor
     fzmodules_plugin(fzmodules_plugin&& rhs) noexcept
         : libpressio_compressor_plugin(std::move(rhs)),
           pipeline_(std::move(rhs.pipeline_)),
           pipeline_dirty_(rhs.pipeline_dirty_),
-          error_bound_(rhs.error_bound_),
-          memory_strategy_(std::move(rhs.memory_strategy_)),
-          memory_multiplier_(rhs.memory_multiplier_),
-          stages_(std::move(rhs.stages_)),
-          connections_(std::move(rhs.connections_)),
-          lorenzo_params_(std::move(rhs.lorenzo_params_))
+          stream_(rhs.stream_)
     {
+        rhs.stream_ = nullptr;
+        move_config_from(rhs);
         rhs.pipeline_dirty_ = true;
     }
-    
+
     // Assignment operators
     fzmodules_plugin& operator=(fzmodules_plugin const& rhs) {
         if(this == &rhs) return *this;
-        
         libpressio_compressor_plugin::operator=(rhs);
         pipeline_.reset();
         pipeline_dirty_ = true;
-        error_bound_ = rhs.error_bound_;
-        memory_strategy_ = rhs.memory_strategy_;
-        memory_multiplier_ = rhs.memory_multiplier_;
-        stages_ = rhs.stages_;
-        connections_ = rhs.connections_;
-        lorenzo_params_ = rhs.lorenzo_params_;
+        if(!stream_) cudaStreamCreate(&stream_);
+        copy_config_from(rhs);
         return *this;
     }
-    
+
     fzmodules_plugin& operator=(fzmodules_plugin&& rhs) noexcept {
         if(this == &rhs) return *this;
-        
         libpressio_compressor_plugin::operator=(std::move(rhs));
         pipeline_ = std::move(rhs.pipeline_);
         pipeline_dirty_ = rhs.pipeline_dirty_;
-        error_bound_ = rhs.error_bound_;
-        memory_strategy_ = std::move(rhs.memory_strategy_);
-        memory_multiplier_ = rhs.memory_multiplier_;
-        stages_ = std::move(rhs.stages_);
-        connections_ = std::move(rhs.connections_);
-        lorenzo_params_ = std::move(rhs.lorenzo_params_);
+        if(stream_) cudaStreamDestroy(stream_);
+        stream_ = rhs.stream_;
+        rhs.stream_ = nullptr;
+        move_config_from(rhs);
         rhs.pipeline_dirty_ = true;
         return *this;
     }
@@ -184,7 +150,8 @@ public:
     struct pressio_options get_options_impl() const override {
         struct pressio_options options;
         
-        // Standard libpressio error bound (applies to all Lorenzo stages)
+        // TODO: relative error bound mode
+        // Standard libpressio error bound
         set(options, "pressio:abs", error_bound_);
         
         // Global pipeline settings
@@ -195,7 +162,8 @@ public:
         set(options, "fzmodules:stages", stages_);
         set(options, "fzmodules:connections", connections_);
         
-        // Per-stage Lorenzo parameters (quant_radius and outlier_capacity only)
+        // TODO: per-stage settings -- when more modules will need more general approach
+        // Per-stage Lorenzo parameters (quant_radius and outlier_capacity)
         for(size_t i = 0; i < stages_.size(); i++) {
             auto parts = split_str(stages_[i], ':');
             if(parts[0] != "lorenzo") continue;
@@ -219,7 +187,7 @@ public:
         struct pressio_options options;
         
         // Thread safety and stability
-        set(options, "pressio:thread_safe", pressio_thread_safety_multiple);
+        set(options, "pressio:thread_safe", pressio_thread_safety_single);
         set(options, "pressio:stability", "experimental");
         
         // Tell libpressio that pressio:abs is a supported error-bound mode
@@ -277,7 +245,7 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
     }
     
     int set_options_impl(struct pressio_options const& options) override {
-        // Standard error bound (propagated to all Lorenzo stages at build time)
+        // Standard error bound
         float old_error_bound = error_bound_;
         get(options, "pressio:abs", &error_bound_);
         
@@ -293,7 +261,8 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
         get(options, "fzmodules:memory_strategy", &memory_strategy_);
         get(options, "fzmodules:memory_multiplier", &memory_multiplier_);
         
-        // Per-stage Lorenzo params (quant_radius and outlier_capacity per stage)
+        // TODO: per-stage settings -- when more modules will need more general approach
+        // Per-stage Lorenzo params
         auto old_params = lorenzo_params_;
         for(size_t i = 0; i < stages_.size(); i++) {
             auto parts = split_str(stages_[i], ':');
@@ -326,12 +295,9 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
             // Dispatch based on data type
             switch(input->dtype()) {
                 case pressio_float_dtype:
-                    return compress_typed<float>(input, output);
+                    return compress_device<float>(input, output);
                 case pressio_double_dtype:
-                    return compress_typed<double>(input, output);
-                // TODO: Add more types if supported
-                // case pressio_int32_dtype:
-                //     return compress_typed<int32_t>(input, output);
+                    return compress_device<double>(input, output);
                 default:
                     return set_error(1, "Unsupported data type for FZModules compression");
             }
@@ -348,7 +314,6 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
                     return decompress_typed<float>(input, output);
                 case pressio_double_dtype:
                     return decompress_typed<double>(input, output);
-                // TODO: Add more types if supported
                 default:
                     return set_error(1, "Unsupported data type for FZModules decompression");
             }
@@ -360,13 +325,7 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
     // =========================================================================
     // Typed Compression/Decompression Templates
     // =========================================================================
-    
-    template<typename T>
-    int compress_typed(const pressio_data* real_input, struct pressio_data* output) {
-        // For now, always use device compression
-        return compress_device<T>(real_input, output);
-    }
-    
+
     template<typename T>
     int compress_device(const pressio_data* real_input, struct pressio_data* output) {
         // Get input parameters
@@ -386,26 +345,26 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
             return set_error(11, std::string("cudaMemcpy H2D failed: ") + cudaGetErrorString(err));
         }
         
-        // Build pipeline if needed
-        if(pipeline_dirty_ || !pipeline_) {
+        // Build pipeline if needed (also rebuild if input size has changed)
+        if(pipeline_dirty_ || !pipeline_ || data_size != last_built_size_) {
             try {
                 build_pipeline(data_size);
                 pipeline_dirty_ = false;
+                last_built_size_ = data_size;
             } catch (std::exception const& ex) {
                 cudaFree(d_input);
                 return set_error(3, std::string("Pipeline construction failed: ") + ex.what());
             }
         }
         
-        // Execute compression with timing
+        // run compression with timing
         void* d_output = nullptr;
         size_t output_size = 0;
         
         auto start = std::chrono::high_resolution_clock::now();
         
         try {
-            pipeline_->compress(d_input, data_size, &d_output, &output_size, 0);
-            cudaDeviceSynchronize();
+            pipeline_->compress(d_input, data_size, &d_output, &output_size, stream_);
         } catch (std::exception const& ex) {
             cudaFree(d_input);
             return set_error(4, std::string("Compression execution failed: ") + ex.what());
@@ -414,7 +373,6 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
         auto end = std::chrono::high_resolution_clock::now();
         last_execution_time_us_ = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
         last_peak_memory_ = pipeline_->getPeakMemoryUsage();
-        last_input_size_ = data_size;
         
         // Free input GPU memory
         cudaFree(d_input);
@@ -441,17 +399,11 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
     }
     
     template<typename T>
-    int compress_host(const pressio_data* real_input, struct pressio_data* output) {
-        return set_error(6, "Host compression not yet implemented - use device execution");
-    }
-    
-    template<typename T>
     int decompress_typed(const pressio_data* compressed_input, struct pressio_data* output) {
-        // Pipeline must have been built by a prior compress call
-        if(!pipeline_ || last_input_size_ == 0) {
+        if(!pipeline_) {
             return set_error(5, "Decompression requires a pipeline built by a prior compress call");
         }
-        
+        const size_t original_size = output->size_in_bytes();
         const void* h_compressed = compressed_input->data();
         size_t compressed_size = compressed_input->size_in_bytes();
         
@@ -471,10 +423,9 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
         size_t output_size = 0;
         
         try {
-            // decompress() operates on the same pipeline object used for compress().
-            // The second argument is the ORIGINAL (uncompressed) data size, not compressed_size.
-            pipeline_->decompress(d_compressed, last_input_size_, &d_output, &output_size, 0);
-            cudaDeviceSynchronize();
+            // decompress() runs on same pipeline as compress
+            // second arg is the ORIGINAL data size, not compressed_size.
+            pipeline_->decompress(d_compressed, original_size, &d_output, &output_size, stream_);
         } catch(std::exception const& ex) {
             cudaFree(d_compressed);
             return set_error(4, std::string("Decompression execution failed: ") + ex.what());
@@ -502,10 +453,9 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
     // =========================================================================
     // Helper Methods
     // =========================================================================
-    
-    bool should_use_device(const pressio_data*) const { return true; }
-    
+
     // Create a stage from a token (e.g. "lorenzo:float:uint16"), add to pipeline, return ptr
+    // essentially a factory for stages based on string tokens
     fz::Stage* add_stage_from_token(const std::string& token, const std::string& sid) {
         auto parts = split_str(token, ':');
         const std::string& kind = parts[0];
@@ -588,22 +538,22 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
     // =========================================================================
     
     int major_version() const override { 
-        // TODO: Return your library's major version
+        // TODO: update
         return 0; 
     }
     
     int minor_version() const override { 
-        // TODO: Return your library's minor version
+        // TODO: update
         return 0; 
     }
     
     int patch_version() const override { 
-        // TODO: Return your library's patch version
+        // TODO: update
         return 1; 
     }
     
     const char* version() const override { 
-        // TODO: Return version string
+        // TODO: update
         return "0.0.1"; 
     }
     
@@ -628,14 +578,37 @@ Per-stage Lorenzo params use 'fzmodules:sN:key' (e.g. fzmodules:s0:quant_radius)
 
 private:
     // =========================================================================
+    // Config Copy/Move Helpers
+    // =========================================================================
+
+    void copy_config_from(fzmodules_plugin const& rhs) {
+        error_bound_       = rhs.error_bound_;
+        memory_strategy_   = rhs.memory_strategy_;
+        memory_multiplier_ = rhs.memory_multiplier_;
+        stages_            = rhs.stages_;
+        connections_       = rhs.connections_;
+        lorenzo_params_    = rhs.lorenzo_params_;
+    }
+
+    void move_config_from(fzmodules_plugin& rhs) {
+        error_bound_       = rhs.error_bound_;
+        memory_strategy_   = std::move(rhs.memory_strategy_);
+        memory_multiplier_ = rhs.memory_multiplier_;
+        stages_            = std::move(rhs.stages_);
+        connections_       = std::move(rhs.connections_);
+        lorenzo_params_    = std::move(rhs.lorenzo_params_);
+    }
+
+    // =========================================================================
     // Member Variables
     // =========================================================================
-    
+
     // Pipeline state
     std::unique_ptr<fz::Pipeline> pipeline_;
     bool pipeline_dirty_;
+    cudaStream_t stream_ = nullptr;
     
-    // Plugin-level error bound (maps to pressio:abs, propagated to all Lorenzo stages)
+    // Plugin-level error bound
     float error_bound_ = 1e-3f;
 
     // Global pipeline settings
@@ -646,7 +619,8 @@ private:
     std::vector<std::string> stages_      = {"lorenzo:float:uint16", "diff:uint16"};
     std::vector<std::string> connections_ = {"s1 <- s0:codes"};
     
-    // Per-stage Lorenzo parameters (quant_radius and outlier_capacity; error_bound is plugin-level)
+    // TODO: per-stage settings -- when more modules will need more general approach
+    // Per-stage Lorenzo parameters
     struct LorenzoParams {
         int   quant_radius      = 512;
         float outlier_capacity  = 0.15f;
@@ -656,16 +630,14 @@ private:
         }
         bool operator!=(const LorenzoParams& o) const { return !(*this == o); }
     };
-    static const LorenzoParams default_lorenzo_;
+    inline static constexpr LorenzoParams default_lorenzo_ = {512, 0.15f};
     std::map<std::string, LorenzoParams> lorenzo_params_;
     
     // Metrics / state from last compression
-    size_t last_input_size_ = 0;       // original uncompressed size; needed by decompress()
+    size_t last_built_size_ = 0;       // data_size used when pipeline was last built
     size_t last_peak_memory_ = 0;
     int64_t last_execution_time_us_ = 0;
 };
-
-const fzmodules_plugin::LorenzoParams fzmodules_plugin::default_lorenzo_ = {};
 
 // =============================================================================
 // Plugin Registration
