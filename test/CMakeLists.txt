@@ -153,19 +153,6 @@ if(LIBPRESSIO_HAS_SZ AND LIBPRESSIO_HAS_FPZIP AND LIBPRESSIO_BUILD_MODE STREQUAL
   target_link_libraries(test_roibin libpressio)
 endif()
 
-# FZModules basic test
-add_executable(test_fzm_basic test_fzm_basic.cc)
-target_link_libraries(test_fzm_basic PRIVATE libpressio)
-if(LIBPRESSIO_HAS_CUDA)
-  find_package(CUDAToolkit REQUIRED)
-  target_link_libraries(test_fzm_basic PRIVATE CUDA::cudart)
-endif()
-
-# FZModules parallel-DAG pipeline test
-# Pipeline: lorenzo -> diff:uint16 (codes) + passthrough (outlier_errors)
-add_executable(test_fzm_dag test_fzm_dag.cc)
-target_link_libraries(test_fzm_dag PRIVATE libpressio)
-if(LIBPRESSIO_HAS_CUDA)
-  find_package(CUDAToolkit REQUIRED)
-  target_link_libraries(test_fzm_dag PRIVATE CUDA::cudart)
+if(LIBPRESSIO_HAS_FZGPUMODULES)
+  add_gtest(test_fzm.cc)
 endif()
