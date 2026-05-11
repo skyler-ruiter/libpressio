@@ -3,7 +3,6 @@
 #include <map>
 #include <algorithm>
 #include <chrono>
-#include <format>
 #include <regex>
 #include "std_compat/memory.h"
 #include "std_compat/utility.h"
@@ -285,7 +284,7 @@ public:
             for_each_stage([&](StageKind& sk, const std::string& sid, const std::string& tok) {
                 sk.populate_documentation(options, sid, tok);
                 if(!sk.outlier_indices_key(tok).empty())
-                    set(options, std::format("fzgpumodules:{}:outlier_count", sid),
+                    set(options, "fzgpumodules:" + sid + ":outlier_count",
                         std::string("[Output] Actual outlier count from last compress"));
             });
         }
@@ -428,7 +427,7 @@ public:
         set(metrics, "fzgpumodules:peak_memory",       last_peak_memory_);
         set(metrics, "fzgpumodules:execution_time_us", last_execution_time_us_);
         for(auto& [sid, count] : last_outlier_counts_)
-            set(metrics, std::format("fzgpumodules:{}:outlier_count", sid), count);
+            set(metrics, "fzgpumodules:" + sid + ":outlier_count", count);
         for(auto& [key, val] : last_stage_outputs_)
             set(metrics, key, val);
         return metrics;
@@ -464,7 +463,7 @@ private:
 
         std::map<std::string, fz::Stage*> ptrs;
         for(size_t i = 0; i < stages_.size(); i++) {
-            std::string sid = std::format("s{}", i);
+            std::string sid = "s" + std::to_string(i);
             auto kv = token_kind(stages_[i]);
             fz::Stage* stage = nullptr;
             for(auto& sk : stage_kinds_) {
@@ -504,14 +503,14 @@ private:
                 return false;
             };
             for (size_t i = 0; i < stages_.size(); i++) {
-                std::string sid = std::format("s{}", i);
+                std::string sid = "s" + std::to_string(i);
                 fz::Stage*  stage = ptrs[sid];
                 auto names = stage->getOutputNames();
                 if (names.empty()) names = {"output"};
                 for (size_t j = 0; j < names.size(); j++) {
                     if (!is_consumed(sid, names[j], j)) {
                         state_.terminal_outputs.push_back({
-                            std::format("fzgpumodules:{}:output:{}", sid, names[j]),
+                            "fzgpumodules:" + sid + ":output:" + names[j],
                             fz_to_pressio_dtype(static_cast<fz::DataType>(stage->getOutputDataType(j)))
                         });
                     }
@@ -655,7 +654,7 @@ private:
     template<typename F>
     void for_each_stage(F&& f) const {
         for(size_t i = 0; i < stages_.size(); i++) {
-            std::string sid = std::format("s{}", i);
+            std::string sid = "s" + std::to_string(i);
             auto kv = token_kind(stages_[i]);
             for(const auto& sk : stage_kinds_)
                 if(sk->matches(kv)) { f(*sk, sid, stages_[i]); break; }
@@ -665,7 +664,7 @@ private:
     template<typename F>
     void for_each_stage(F&& f) {
         for(size_t i = 0; i < stages_.size(); i++) {
-            std::string sid = std::format("s{}", i);
+            std::string sid = "s" + std::to_string(i);
             auto kv = token_kind(stages_[i]);
             for(auto& sk : stage_kinds_)
                 if(sk->matches(kv)) { f(*sk, sid, stages_[i]); break; }
