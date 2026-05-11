@@ -154,5 +154,5 @@ if(LIBPRESSIO_HAS_SZ AND LIBPRESSIO_HAS_FPZIP AND LIBPRESSIO_BUILD_MODE STREQUAL
 endif()
 
 if(LIBPRESSIO_HAS_FZGPUMODULES)
-  add_gtest(test_fzm.cc)
+  add_gtest(test_fzgm.cc)
 endif()
