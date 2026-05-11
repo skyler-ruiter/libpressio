@@ -1,5 +1,4 @@
 #pragma once
-#include <compare>
 #include "stage_kind.h"
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
@@ -7,7 +6,10 @@ namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 struct BitshuffleParams {
     int element_width = 4;      // bytes: 1, 2, 4, or 8; must match incoming data element type
     int block_size    = 16384;  // bytes; must be multiple of 1024*element_width
-    auto operator<=>(const BitshuffleParams&) const = default;
+    bool operator==(const BitshuffleParams& o) const {
+        return element_width == o.element_width && block_size == o.block_size;
+    }
+    bool operator!=(const BitshuffleParams& o) const { return !(*this == o); }
 };
 
 class BitshuffleStageKind : public StageKind {
@@ -28,28 +30,28 @@ public:
                            const std::string& sid,
                            const std::string& /*token*/) const override {
         const auto& p = get_params(sid);
-        opts.set(std::format("fzgpumodules:{}:element_width", sid), p.element_width);
-        opts.set(std::format("fzgpumodules:{}:block_size",    sid), p.block_size);
+        opts.set("fzgpumodules:" + sid + ":element_width", p.element_width);
+        opts.set("fzgpumodules:" + sid + ":block_size",    p.block_size);
     }
 
     bool read_options(const pressio_options& opts,
                        const std::string&     sid,
                        const std::string&     /*token*/) override {
-        if(!params_.contains(sid)) params_[sid] = BitshuffleParams{};
+        if(params_.count(sid) == 0) params_[sid] = BitshuffleParams{};
         auto  old = params_[sid];
         auto& p   = params_[sid];
-        opts.get(std::format("fzgpumodules:{}:element_width", sid), &p.element_width);
-        opts.get(std::format("fzgpumodules:{}:block_size",    sid), &p.block_size);
+        opts.get("fzgpumodules:" + sid + ":element_width", &p.element_width);
+        opts.get("fzgpumodules:" + sid + ":block_size",    &p.block_size);
         return p != old;
     }
 
     void populate_documentation(pressio_options&   opts,
                                  const std::string& sid,
                                  const std::string& /*token*/) const override {
-        opts.set(std::format("fzgpumodules:{}:element_width", sid),
+        opts.set("fzgpumodules:" + sid + ":element_width",
             std::string("Element width in bytes for bit-matrix transpose: 1, 2, 4, or 8 (default 4). "
             "Must match the actual element type of the incoming data."));
-        opts.set(std::format("fzgpumodules:{}:block_size", sid),
+        opts.set("fzgpumodules:" + sid + ":block_size",
             std::string("Chunk size in bytes (default 16384; must be multiple of 1024*element_width)"));
     }
 

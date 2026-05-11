@@ -1,12 +1,12 @@
 #pragma once
-#include <compare>
 #include "stage_kind.h"
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
 struct BitpackParams {
     int nbits = 0;  // 0 = stage default (full width); set to power-of-2 to save bits
-    auto operator<=>(const BitpackParams&) const = default;
+    bool operator==(const BitpackParams& o) const { return nbits == o.nbits; }
+    bool operator!=(const BitpackParams& o) const { return !(*this == o); }
 };
 
 class BitpackStageKind : public StageKind {
@@ -41,22 +41,22 @@ public:
     void populate_options(pressio_options&   opts,
                            const std::string& sid,
                            const std::string& /*token*/) const override {
-        opts.set(std::format("fzgpumodules:{}:nbits", sid), get_params(sid).nbits);
+        opts.set("fzgpumodules:" + sid + ":nbits", get_params(sid).nbits);
     }
 
     bool read_options(const pressio_options& opts,
                        const std::string&     sid,
                        const std::string&     /*token*/) override {
-        if(!params_.contains(sid)) params_[sid] = BitpackParams{};
+        if(params_.count(sid) == 0) params_[sid] = BitpackParams{};
         auto  old = params_[sid];
-        opts.get(std::format("fzgpumodules:{}:nbits", sid), &params_[sid].nbits);
+        opts.get("fzgpumodules:" + sid + ":nbits", &params_[sid].nbits);
         return params_[sid] != old;
     }
 
     void populate_documentation(pressio_options&   opts,
                                  const std::string& sid,
                                  const std::string& /*token*/) const override {
-        opts.set(std::format("fzgpumodules:{}:nbits", sid),
+        opts.set("fzgpumodules:" + sid + ":nbits",
             std::string("Bits per element (power of 2; 0 = use stage default i.e. full width). "
             "uint8: 1/2/4/8; uint16: 1/2/4/8/16; uint32: 1/2/4/8/16/32."));
     }

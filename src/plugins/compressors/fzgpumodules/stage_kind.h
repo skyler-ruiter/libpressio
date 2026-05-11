@@ -3,8 +3,6 @@
 #include <string_view>
 #include <vector>
 #include <map>
-#include <format>
-#include <ranges>
 #include <stdexcept>
 #include "libpressio_ext/cpp/options.h"
 #include "fzgpumodules.h"
@@ -19,8 +17,12 @@ namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
 inline std::vector<std::string> split_str(std::string_view s, char delim) {
     std::vector<std::string> parts;
-    for (auto part : s | std::views::split(delim))
-        parts.emplace_back(part.begin(), part.end());
+    std::string_view::size_type start = 0, end;
+    while ((end = s.find(delim, start)) != std::string_view::npos) {
+        parts.emplace_back(s.substr(start, end - start));
+        start = end + 1;
+    }
+    parts.emplace_back(s.substr(start));
     return parts;
 }
 

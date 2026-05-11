@@ -1,5 +1,4 @@
 #pragma once
-#include <compare>
 #include <limits>
 #include "stage_kind.h"
 
@@ -12,7 +11,15 @@ struct QuantizerParams {
     float value_base        = 0.0f;   // 0 = auto-scan; >0 = skip NOA scan
     float outlier_threshold = std::numeric_limits<float>::infinity();  // |x| >= threshold → lossless
     bool  inplace_outliers  = false;  // requires zigzag_codes=true AND sizeof(TCode)==sizeof(TIn)
-    auto operator<=>(const QuantizerParams&) const = default;
+    bool operator==(const QuantizerParams& o) const {
+        return quant_radius == o.quant_radius &&
+               outlier_capacity == o.outlier_capacity &&
+               zigzag_codes == o.zigzag_codes &&
+               value_base == o.value_base &&
+               outlier_threshold == o.outlier_threshold &&
+               inplace_outliers == o.inplace_outliers;
+    }
+    bool operator!=(const QuantizerParams& o) const { return !(*this == o); }
 };
 
 class QuantizerStageKind : public StageKind {
@@ -37,26 +44,26 @@ public:
                            const std::string& sid,
                            const std::string& /*token*/) const override {
         const auto& p = get_params(sid);
-        opts.set(std::format("fzgpumodules:{}:quant_radius",      sid), p.quant_radius);
-        opts.set(std::format("fzgpumodules:{}:outlier_capacity",  sid), p.outlier_capacity);
-        opts.set(std::format("fzgpumodules:{}:zigzag_codes",      sid), p.zigzag_codes);
-        opts.set(std::format("fzgpumodules:{}:value_base",        sid), p.value_base);
-        opts.set(std::format("fzgpumodules:{}:outlier_threshold", sid), p.outlier_threshold);
-        opts.set(std::format("fzgpumodules:{}:inplace_outliers",  sid), p.inplace_outliers);
+        opts.set("fzgpumodules:" + sid + ":quant_radius",      p.quant_radius);
+        opts.set("fzgpumodules:" + sid + ":outlier_capacity",  p.outlier_capacity);
+        opts.set("fzgpumodules:" + sid + ":zigzag_codes",      p.zigzag_codes);
+        opts.set("fzgpumodules:" + sid + ":value_base",        p.value_base);
+        opts.set("fzgpumodules:" + sid + ":outlier_threshold", p.outlier_threshold);
+        opts.set("fzgpumodules:" + sid + ":inplace_outliers",  p.inplace_outliers);
     }
 
     bool read_options(const pressio_options& opts,
                        const std::string&     sid,
                        const std::string&     /*token*/) override {
-        if(!params_.contains(sid)) params_[sid] = QuantizerParams{};
+        if(params_.count(sid) == 0) params_[sid] = QuantizerParams{};
         auto  old = params_[sid];
         auto& p   = params_[sid];
-        opts.get(std::format("fzgpumodules:{}:quant_radius",      sid), &p.quant_radius);
-        opts.get(std::format("fzgpumodules:{}:outlier_capacity",  sid), &p.outlier_capacity);
-        opts.get(std::format("fzgpumodules:{}:zigzag_codes",      sid), &p.zigzag_codes);
-        opts.get(std::format("fzgpumodules:{}:value_base",        sid), &p.value_base);
-        opts.get(std::format("fzgpumodules:{}:outlier_threshold", sid), &p.outlier_threshold);
-        opts.get(std::format("fzgpumodules:{}:inplace_outliers",  sid), &p.inplace_outliers);
+        opts.get("fzgpumodules:" + sid + ":quant_radius",      &p.quant_radius);
+        opts.get("fzgpumodules:" + sid + ":outlier_capacity",  &p.outlier_capacity);
+        opts.get("fzgpumodules:" + sid + ":zigzag_codes",      &p.zigzag_codes);
+        opts.get("fzgpumodules:" + sid + ":value_base",        &p.value_base);
+        opts.get("fzgpumodules:" + sid + ":outlier_threshold", &p.outlier_threshold);
+        opts.get("fzgpumodules:" + sid + ":inplace_outliers",  &p.inplace_outliers);
         return p != old;
     }
 
@@ -67,17 +74,17 @@ public:
     void populate_documentation(pressio_options&   opts,
                                  const std::string& sid,
                                  const std::string& /*token*/) const override {
-        opts.set(std::format("fzgpumodules:{}:quant_radius",      sid),
+        opts.set("fzgpumodules:" + sid + ":quant_radius",
             std::string("Quantization radius (bin count / 2)"));
-        opts.set(std::format("fzgpumodules:{}:outlier_capacity",  sid),
+        opts.set("fzgpumodules:" + sid + ":outlier_capacity",
             std::string("Outlier buffer reserve as fraction of total elements"));
-        opts.set(std::format("fzgpumodules:{}:zigzag_codes",      sid),
+        opts.set("fzgpumodules:" + sid + ":zigzag_codes",
             std::string("Zigzag-encode codes before downstream storage"));
-        opts.set(std::format("fzgpumodules:{}:value_base",        sid),
+        opts.set("fzgpumodules:" + sid + ":value_base",
             std::string("Pre-computed value_range (NOA) or max(|data|) (REL) to skip NOA data scan; 0 = auto"));
-        opts.set(std::format("fzgpumodules:{}:outlier_threshold", sid),
+        opts.set("fzgpumodules:" + sid + ":outlier_threshold",
             std::string("ABS/NOA: |x| >= threshold stored losslessly (default: infinity = disabled)"));
-        opts.set(std::format("fzgpumodules:{}:inplace_outliers",  sid),
+        opts.set("fzgpumodules:" + sid + ":inplace_outliers",
             std::string("Encode outliers in-place in codes array; requires zigzag_codes=true "
             "and sizeof(TCode)==sizeof(TIn) (default: false)"));
     }

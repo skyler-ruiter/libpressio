@@ -1,5 +1,4 @@
 #pragma once
-#include <compare>
 #include "stage_kind.h"
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
@@ -7,7 +6,10 @@ namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 struct RZEParams {
     int chunk_size = 16384;  // bytes; must be multiple of 4096
     int levels     = 4;      // recursion depth 1–4
-    auto operator<=>(const RZEParams&) const = default;
+    bool operator==(const RZEParams& o) const {
+        return chunk_size == o.chunk_size && levels == o.levels;
+    }
+    bool operator!=(const RZEParams& o) const { return !(*this == o); }
 };
 
 class RZEStageKind : public StageKind {
@@ -28,27 +30,27 @@ public:
                            const std::string& sid,
                            const std::string& /*token*/) const override {
         const auto& p = get_params(sid);
-        opts.set(std::format("fzgpumodules:{}:chunk_size", sid), p.chunk_size);
-        opts.set(std::format("fzgpumodules:{}:levels",     sid), p.levels);
+        opts.set("fzgpumodules:" + sid + ":chunk_size", p.chunk_size);
+        opts.set("fzgpumodules:" + sid + ":levels",     p.levels);
     }
 
     bool read_options(const pressio_options& opts,
                        const std::string&     sid,
                        const std::string&     /*token*/) override {
-        if(!params_.contains(sid)) params_[sid] = RZEParams{};
+        if(params_.count(sid) == 0) params_[sid] = RZEParams{};
         auto  old = params_[sid];
         auto& p   = params_[sid];
-        opts.get(std::format("fzgpumodules:{}:chunk_size", sid), &p.chunk_size);
-        opts.get(std::format("fzgpumodules:{}:levels",     sid), &p.levels);
+        opts.get("fzgpumodules:" + sid + ":chunk_size", &p.chunk_size);
+        opts.get("fzgpumodules:" + sid + ":levels",     &p.levels);
         return p != old;
     }
 
     void populate_documentation(pressio_options&   opts,
                                  const std::string& sid,
                                  const std::string& /*token*/) const override {
-        opts.set(std::format("fzgpumodules:{}:chunk_size", sid),
+        opts.set("fzgpumodules:" + sid + ":chunk_size",
             std::string("RZE chunk size in bytes (default 16384; must be multiple of 4096)"));
-        opts.set(std::format("fzgpumodules:{}:levels", sid),
+        opts.set("fzgpumodules:" + sid + ":levels",
             std::string("RZE recursion depth 1-4 (default 4)"));
     }
 

@@ -1,5 +1,4 @@
 #pragma once
-#include <compare>
 #include <limits>
 #include "stage_kind.h"
 
@@ -10,7 +9,13 @@ struct LorenzoParams {
     float outlier_capacity = 0.2f;
     bool  zigzag_codes     = false;
     float value_base       = 0.0f;  // 0 = auto-scan; >0 = skip scan (NOA: value_range, REL: max|data|)
-    auto operator<=>(const LorenzoParams&) const = default;
+    bool operator==(const LorenzoParams& o) const {
+        return quant_radius == o.quant_radius &&
+               outlier_capacity == o.outlier_capacity &&
+               zigzag_codes == o.zigzag_codes &&
+               value_base == o.value_base;
+    }
+    bool operator!=(const LorenzoParams& o) const { return !(*this == o); }
 };
 
 class LorenzoStageKind : public StageKind {
@@ -43,23 +48,23 @@ public:
                            const std::string& token) const override {
         if(is_int(token)) return;
         const auto& p = get_params(sid);
-        opts.set(std::format("fzgpumodules:{}:quant_radius",     sid), p.quant_radius);
-        opts.set(std::format("fzgpumodules:{}:outlier_capacity", sid), p.outlier_capacity);
-        opts.set(std::format("fzgpumodules:{}:zigzag_codes",     sid), p.zigzag_codes);
-        opts.set(std::format("fzgpumodules:{}:value_base",       sid), p.value_base);
+        opts.set("fzgpumodules:" + sid + ":quant_radius",     p.quant_radius);
+        opts.set("fzgpumodules:" + sid + ":outlier_capacity", p.outlier_capacity);
+        opts.set("fzgpumodules:" + sid + ":zigzag_codes",     p.zigzag_codes);
+        opts.set("fzgpumodules:" + sid + ":value_base",       p.value_base);
     }
 
     bool read_options(const pressio_options& opts,
                        const std::string&     sid,
                        const std::string&     token) override {
         if(is_int(token)) return false;
-        if(!params_.contains(sid)) params_[sid] = LorenzoParams{};
+        if(params_.count(sid) == 0) params_[sid] = LorenzoParams{};
         auto  old = params_[sid];
         auto& p   = params_[sid];
-        opts.get(std::format("fzgpumodules:{}:quant_radius",     sid), &p.quant_radius);
-        opts.get(std::format("fzgpumodules:{}:outlier_capacity", sid), &p.outlier_capacity);
-        opts.get(std::format("fzgpumodules:{}:zigzag_codes",     sid), &p.zigzag_codes);
-        opts.get(std::format("fzgpumodules:{}:value_base",       sid), &p.value_base);
+        opts.get("fzgpumodules:" + sid + ":quant_radius",     &p.quant_radius);
+        opts.get("fzgpumodules:" + sid + ":outlier_capacity", &p.outlier_capacity);
+        opts.get("fzgpumodules:" + sid + ":zigzag_codes",     &p.zigzag_codes);
+        opts.get("fzgpumodules:" + sid + ":value_base",       &p.value_base);
         return p != old;
     }
 
@@ -71,13 +76,13 @@ public:
                                  const std::string& sid,
                                  const std::string& token) const override {
         if(is_int(token)) return;
-        opts.set(std::format("fzgpumodules:{}:quant_radius",     sid),
+        opts.set("fzgpumodules:" + sid + ":quant_radius",
             std::string("Quantization radius (bin count / 2)"));
-        opts.set(std::format("fzgpumodules:{}:outlier_capacity", sid),
+        opts.set("fzgpumodules:" + sid + ":outlier_capacity",
             std::string("Outlier buffer reserve as fraction of total elements"));
-        opts.set(std::format("fzgpumodules:{}:zigzag_codes",     sid),
+        opts.set("fzgpumodules:" + sid + ":zigzag_codes",
             std::string("Zigzag-encode codes before downstream storage"));
-        opts.set(std::format("fzgpumodules:{}:value_base",       sid),
+        opts.set("fzgpumodules:" + sid + ":value_base",
             std::string("Pre-computed value_range (NOA) or max(|data|) (REL) to skip data scan; 0 = auto"));
     }
 
