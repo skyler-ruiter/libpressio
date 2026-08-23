@@ -117,7 +117,7 @@ struct PipelineState {
 static void configure_pipeline_base(fz::Pipeline& p,
                                      const std::array<size_t,3>* dims,
                                      int num_streams) {
-    p.setPoolManagedDecompOutput(false);
+    // Decompress ownership is chosen at the call site via decompressOwned(); no flag needed.
     if (dims) p.setDims(*dims);
     if (num_streams > 1) p.setNumStreams(num_streams);
 }
@@ -569,15 +569,17 @@ private:
             }
         }
 
-        void*  d_pool_out  = nullptr;
-        size_t output_size = 0;
+        // compress() returns a BorrowedDeviceBuffer — pool-owned, valid until the
+        // next compress()/reset(). We copy it out below into a pressio-owned buffer.
+        fz::BorrowedDeviceBuffer comp;
 
         auto start = std::chrono::high_resolution_clock::now();
         try {
-            state_.ptr->compress(d_input, data_size, &d_pool_out, &output_size, stream_);
+            comp = state_.ptr->compress({d_input, data_size}, stream_);
         } catch(std::exception const& ex) {
             return set_error(4, std::string("Compression execution failed: ") + ex.what());
         }
+        const size_t output_size = comp.bytes();
         auto end = std::chrono::high_resolution_clock::now();
         last_execution_time_us_ =
             std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
@@ -594,16 +596,15 @@ private:
         last_stage_outputs_.clear();
         if (expose_stage_outputs_ && !state_.terminal_outputs.empty()) {
             std::vector<uint8_t> h_buf(output_size);
-            cudaMemcpy(h_buf.data(), d_pool_out, output_size, cudaMemcpyDeviceToHost);
+            cudaMemcpy(h_buf.data(), comp.data(), output_size, cudaMemcpyDeviceToHost);
             parse_stage_outputs(h_buf.data(), output_size);
         }
 
-        // The pipeline returns a pool-owned pointer.  Copy to a fresh cudaMalloc
-        // allocation so pressio_data can safely cudaFree it without corrupting
-        // the pool on repeated compress() calls.
+        // comp is pool-owned; copy into a fresh cudaMalloc allocation so pressio_data
+        // owns a buffer it can cudaFree without touching the pool on the next compress().
         void* d_output = nullptr;
         cudaMalloc(&d_output, output_size);
-        cudaMemcpyAsync(d_output, d_pool_out, output_size,
+        cudaMemcpyAsync(d_output, comp.data(), output_size,
                         cudaMemcpyDeviceToDevice, stream_);
         cudaStreamSynchronize(stream_);
 
@@ -621,26 +622,27 @@ private:
         const pressio_dtype out_dtype  = output->dtype();
         const auto          out_dims   = output->dimensions();
 
-        void*  d_output    = nullptr;
-        size_t output_size = 0;
+        // decompressOwned() returns a caller-owned OwnedDeviceBuffer regardless of any
+        // pipeline flag; release() transfers the cudaMalloc'd pointer to pressio_data.
+        fz::OwnedDeviceBuffer dec;
         try {
             if (graph_mode_) {
-                // Live DAG buffers hold the compressed state from the last compress()
-                // call. Using nullptr avoids the external concat parse path which would
-                // corrupt buffer_metadata_ and break the next compress() call.
-                state_.ptr->decompress(nullptr, 0, &d_output, &output_size, stream_);
+                // Empty span => read the live DAG buffers from the last compress()
+                // (the same as the old nullptr path): avoids the external concat parse
+                // that would corrupt buffer_metadata_ and break the next compress().
+                dec = state_.ptr->decompressOwned({}, stream_);
             } else {
                 pressio_data gpu_compressed = domain_manager().make_readable(
                     domain_plugins().build("cudamalloc"), *compressed_input);
-                state_.ptr->decompress(gpu_compressed.data(), gpu_compressed.size_in_bytes(),
-                                       &d_output, &output_size, stream_);
+                dec = state_.ptr->decompressOwned(
+                    {gpu_compressed.data(), gpu_compressed.size_in_bytes()}, stream_);
             }
         } catch(std::exception const& ex) {
             return set_error(4, std::string("Decompression execution failed: ") + ex.what());
         }
 
         pressio_data gpu_output = pressio_data::move(
-            out_dtype, d_output, out_dims,
+            out_dtype, dec.release(), out_dims,
             domain_plugins().build("cudamalloc"));
         *output = domain_manager().make_readable(
             domain_plugins().build("malloc"), std::move(gpu_output));
