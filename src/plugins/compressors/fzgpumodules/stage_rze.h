@@ -4,10 +4,10 @@
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
 struct RZEParams {
-    int chunk_size = 16384;  // bytes; must be multiple of 4096
-    int levels     = 4;      // recursion depth 1–4
+    int chunk_size = 16384;  // bytes; 4096, 8192, or 16384
+    int word_size  = 1;      // LC RZE_N word granularity: 1, 2, 4, or 8
     bool operator==(const RZEParams& o) const {
-        return chunk_size == o.chunk_size && levels == o.levels;
+        return chunk_size == o.chunk_size && word_size == o.word_size;
     }
     bool operator!=(const RZEParams& o) const { return !(*this == o); }
 };
@@ -22,7 +22,7 @@ public:
         const auto& p = get_params(sid);
         auto* s = ctx.pipeline.addStage<fz::RZEStage>();
         s->setChunkSize(p.chunk_size);
-        s->setLevels(p.levels);
+        s->setWordSize(p.word_size);
         return s;
     }
 
@@ -31,7 +31,7 @@ public:
                            const std::string& /*token*/) const override {
         const auto& p = get_params(sid);
         opts.set("fzgpumodules:" + sid + ":chunk_size", p.chunk_size);
-        opts.set("fzgpumodules:" + sid + ":levels",     p.levels);
+        opts.set("fzgpumodules:" + sid + ":word_size",  p.word_size);
     }
 
     bool read_options(const pressio_options& opts,
@@ -41,7 +41,7 @@ public:
         auto  old = params_[sid];
         auto& p   = params_[sid];
         opts.get("fzgpumodules:" + sid + ":chunk_size", &p.chunk_size);
-        opts.get("fzgpumodules:" + sid + ":levels",     &p.levels);
+        opts.get("fzgpumodules:" + sid + ":word_size",  &p.word_size);
         return p != old;
     }
 
@@ -49,9 +49,9 @@ public:
                                  const std::string& sid,
                                  const std::string& /*token*/) const override {
         opts.set("fzgpumodules:" + sid + ":chunk_size",
-            std::string("RZE chunk size in bytes (default 16384; must be multiple of 4096)"));
-        opts.set("fzgpumodules:" + sid + ":levels",
-            std::string("RZE recursion depth 1-4 (default 4)"));
+            std::string("RZE chunk size in bytes (4096, 8192, or 16384; default 16384)"));
+        opts.set("fzgpumodules:" + sid + ":word_size",
+            std::string("RZE word granularity 1/2/4/8 = LC RZE_1/2/4/8 (default 1)"));
     }
 
 private:
