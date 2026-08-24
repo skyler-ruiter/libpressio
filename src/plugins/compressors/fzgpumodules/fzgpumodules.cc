@@ -724,8 +724,13 @@ private:
         if(!state_.ptr)
             return set_error(5, "Decompression requires a pipeline built by a prior compress call");
 
-        const pressio_dtype out_dtype  = output->dtype();
-        const auto          out_dims   = output->dimensions();
+        const pressio_dtype out_dtype   = output->dtype();
+        const auto          out_dims    = output->dimensions();
+        // Caller-requested output domain, captured before *output is overwritten below.
+        // A caller who passed a GPU-resident buffer (e.g. a CuPy array via
+        // __cuda_array_interface__) gets a GPU-resident result back with no D2H copy;
+        // everyone else (numpy arrays, out=None) keeps the previous host-copy behavior.
+        const bool           out_wants_device = output->domain()->domain_id() == "cudamalloc";
 
         // decompressOwned() returns a caller-owned OwnedDeviceBuffer regardless of any
         // pipeline flag; release() transfers the cudaMalloc'd pointer to pressio_data.
@@ -749,8 +754,9 @@ private:
         pressio_data gpu_output = pressio_data::move(
             out_dtype, dec.release(), out_dims,
             domain_plugins().build("cudamalloc"));
-        *output = domain_manager().make_readable(
-            domain_plugins().build("malloc"), std::move(gpu_output));
+        *output = out_wants_device
+            ? std::move(gpu_output)
+            : domain_manager().make_readable(domain_plugins().build("malloc"), std::move(gpu_output));
         return 0;
     }
 
