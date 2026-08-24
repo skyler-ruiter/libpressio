@@ -3,27 +3,24 @@
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
-struct RZEParams {
-    // int64_t (not int): pressio_options::get() requires an exact type match
-    // and libpressio's Python layer always boxes int->int64_t, so narrower
-    // fields here would silently never be set.
+struct RAZEParams {
     int64_t chunk_size = 16384;  // bytes; 4096, 8192, or 16384
-    int64_t word_size  = 1;      // LC RZE_N word granularity: 1, 2, 4, or 8
-    bool operator==(const RZEParams& o) const {
+    int64_t word_size  = 1;      // LC RAZE word granularity: 1, 2, 4, or 8
+    bool operator==(const RAZEParams& o) const {
         return chunk_size == o.chunk_size && word_size == o.word_size;
     }
-    bool operator!=(const RZEParams& o) const { return !(*this == o); }
+    bool operator!=(const RAZEParams& o) const { return !(*this == o); }
 };
 
-class RZEStageKind : public StageKind {
+class RAZEStageKind : public StageKind {
 public:
-    bool matches(std::string_view kind) const override { return kind == "rze"; }
+    bool matches(std::string_view kind) const override { return kind == "raze"; }
 
     fz::Stage* add_stage(const std::string& /*token*/,
                           const std::string& sid,
                           const StageContext& ctx) override {
         const auto& p = get_params(sid);
-        auto* s = ctx.pipeline.addStage<fz::RZEStage>();
+        auto* s = ctx.pipeline.addStage<fz::RAZEStage>();
         s->setChunkSize(static_cast<size_t>(p.chunk_size));
         s->setWordSize(static_cast<size_t>(p.word_size));
         return s;
@@ -40,7 +37,7 @@ public:
     bool read_options(const pressio_options& opts,
                        const std::string&     sid,
                        const std::string&     /*token*/) override {
-        if(params_.count(sid) == 0) params_[sid] = RZEParams{};
+        if(params_.count(sid) == 0) params_[sid] = RAZEParams{};
         auto  old = params_[sid];
         auto& p   = params_[sid];
         opts.get("fzgpumodules:" + sid + ":chunk_size", &p.chunk_size);
@@ -52,16 +49,16 @@ public:
                                  const std::string& sid,
                                  const std::string& /*token*/) const override {
         opts.set("fzgpumodules:" + sid + ":chunk_size",
-            std::string("RZE chunk size in bytes (4096, 8192, or 16384; default 16384)"));
+            std::string("RAZE chunk size in bytes (4096, 8192, or 16384; default 16384)"));
         opts.set("fzgpumodules:" + sid + ":word_size",
-            std::string("RZE word granularity 1/2/4/8 = LC RZE_1/2/4/8 (default 1)"));
+            std::string("RAZE word granularity 1/2/4/8 = LC RAZE_1/2/4/8 (default 1)"));
     }
 
 private:
-    std::map<std::string, RZEParams> params_;
-    const RZEParams defaults_{};
+    std::map<std::string, RAZEParams> params_;
+    const RAZEParams defaults_{};
 
-    const RZEParams& get_params(const std::string& sid) const {
+    const RAZEParams& get_params(const std::string& sid) const {
         auto it = params_.find(sid);
         return it != params_.end() ? it->second : defaults_;
     }

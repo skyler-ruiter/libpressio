@@ -5,19 +5,30 @@
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
 struct QuantizerParams {
-    int   quant_radius      = 32768;
-    float outlier_capacity  = 0.2f;
-    bool  zigzag_codes      = false;
-    float value_base        = 0.0f;   // 0 = auto-scan; >0 = skip NOA scan
-    float outlier_threshold = std::numeric_limits<float>::infinity();  // |x| >= threshold → lossless
-    bool  inplace_outliers  = false;  // requires zigzag_codes=true AND sizeof(TCode)==sizeof(TIn)
+    // int64_t/double (not int/float): pressio_options::get() requires an exact
+    // type match and libpressio's Python layer always boxes int->int64_t,
+    // float->double, so narrower fields here would silently never be set.
+    int64_t quant_radius      = 32768;
+    double  outlier_capacity  = 0.2;
+    bool    zigzag_codes      = false;
+    double  value_base        = 0.0;   // 0 = auto-scan; >0 = skip NOA scan
+    double  outlier_threshold = std::numeric_limits<double>::infinity();  // |x| >= threshold → lossless
+    bool    inplace_outliers  = false;  // requires zigzag_codes=true AND sizeof(TCode)==sizeof(TIn)
+    bool    linear_mode      = false;  // no-outlier cuSZp-style raw signed codes; excl. w/ REL, inplace_outliers, zigzag_codes
+    bool    dither            = false;  // dithered reconstruction; excl. w/ linear_mode, inplace_outliers
+    int64_t dither_seed       = 0;      // Python ints box as int64_t; cast to uint64_t for the setter
+    double  dither_strength   = 1.0;
     bool operator==(const QuantizerParams& o) const {
         return quant_radius == o.quant_radius &&
                outlier_capacity == o.outlier_capacity &&
                zigzag_codes == o.zigzag_codes &&
                value_base == o.value_base &&
                outlier_threshold == o.outlier_threshold &&
-               inplace_outliers == o.inplace_outliers;
+               inplace_outliers == o.inplace_outliers &&
+               linear_mode == o.linear_mode &&
+               dither == o.dither &&
+               dither_seed == o.dither_seed &&
+               dither_strength == o.dither_strength;
     }
     bool operator!=(const QuantizerParams& o) const { return !(*this == o); }
 };
@@ -50,6 +61,10 @@ public:
         opts.set("fzgpumodules:" + sid + ":value_base",        p.value_base);
         opts.set("fzgpumodules:" + sid + ":outlier_threshold", p.outlier_threshold);
         opts.set("fzgpumodules:" + sid + ":inplace_outliers",  p.inplace_outliers);
+        opts.set("fzgpumodules:" + sid + ":linear_mode",       p.linear_mode);
+        opts.set("fzgpumodules:" + sid + ":dither",            p.dither);
+        opts.set("fzgpumodules:" + sid + ":dither_seed",       p.dither_seed);
+        opts.set("fzgpumodules:" + sid + ":dither_strength",   p.dither_strength);
     }
 
     bool read_options(const pressio_options& opts,
@@ -64,6 +79,10 @@ public:
         opts.get("fzgpumodules:" + sid + ":value_base",        &p.value_base);
         opts.get("fzgpumodules:" + sid + ":outlier_threshold", &p.outlier_threshold);
         opts.get("fzgpumodules:" + sid + ":inplace_outliers",  &p.inplace_outliers);
+        opts.get("fzgpumodules:" + sid + ":linear_mode",       &p.linear_mode);
+        opts.get("fzgpumodules:" + sid + ":dither",            &p.dither);
+        opts.get("fzgpumodules:" + sid + ":dither_seed",       &p.dither_seed);
+        opts.get("fzgpumodules:" + sid + ":dither_strength",   &p.dither_strength);
         return p != old;
     }
 
@@ -81,12 +100,34 @@ public:
         opts.set("fzgpumodules:" + sid + ":zigzag_codes",
             std::string("Zigzag-encode codes before downstream storage"));
         opts.set("fzgpumodules:" + sid + ":value_base",
-            std::string("Pre-computed value_range (NOA) or max(|data|) (REL) to skip NOA data scan; 0 = auto"));
+            std::string("Pre-computed value_range to skip the NOA data scan; 0 = auto. "
+            "No effect outside NOA mode."));
         opts.set("fzgpumodules:" + sid + ":outlier_threshold",
             std::string("ABS/NOA: |x| >= threshold stored losslessly (default: infinity = disabled)"));
         opts.set("fzgpumodules:" + sid + ":inplace_outliers",
             std::string("Encode outliers in-place in codes array; requires zigzag_codes=true "
             "and sizeof(TCode)==sizeof(TIn) (default: false)"));
+        opts.set("fzgpumodules:" + sid + ":linear_mode",
+            std::string("ABS/NOA: no-outlier cuSZp-style raw signed codes, no radius clamp, no "
+            "zigzag. Mutually exclusive with error_bound_mode=rel, inplace_outliers, and "
+            "zigzag_codes (default: false). A value whose bin exceeds the signed code range "
+            "raises a clean exception at compress time (rather than silently wrapping) — "
+            "widen the code type, center the data first, or use an outlier-capable quantizer "
+            "instead."));
+        opts.set("fzgpumodules:" + sid + ":dither",
+            std::string("Reconstruct to a deterministic pseudo-random point within the "
+            "error-bound interval instead of the bin center, decorrelating reconstruction "
+            "error from the signal. Elements that would violate the bound under dithering are "
+            "escalated to lossless outliers. Mutually exclusive with linear_mode and "
+            "inplace_outliers (default: false)"));
+        opts.set("fzgpumodules:" + sid + ":dither_seed",
+            std::string("Seed for the deterministic dither offset; persisted in the compressed "
+            "header so decode reproduces identical offsets (default: 0)"));
+        opts.set("fzgpumodules:" + sid + ":dither_strength",
+            std::string("Dither offset amplitude as a fraction of the error bound, in (0, 1]. "
+            "1.0 (default) spans the full bin and empirically escalates ~25% of elements to "
+            "lossless outliers for smooth data; lower values trade decorrelation for fewer "
+            "outliers; 0.0 disables the offset (bit-identical to dither=false)"));
     }
 
 private:
@@ -104,12 +145,16 @@ private:
         auto* s = ctx.pipeline.addStage<fz::QuantizerStage<TIn, TCode>>();
         s->setErrorBound(static_cast<TIn>(ctx.eb));
         s->setErrorBoundMode(ctx.eb_mode);
-        s->setQuantRadius(p.quant_radius);
-        s->setOutlierCapacity(p.outlier_capacity);
+        s->setQuantRadius(static_cast<int>(p.quant_radius));
+        s->setOutlierCapacity(static_cast<float>(p.outlier_capacity));
         s->setZigzagCodes(p.zigzag_codes);
-        if(p.value_base > 0.0f) s->setValueBase(p.value_base);
-        s->setOutlierThreshold(p.outlier_threshold);
+        if(p.value_base > 0.0) s->setValueBase(static_cast<float>(p.value_base));
+        s->setOutlierThreshold(static_cast<float>(p.outlier_threshold));
         s->setInplaceOutliers(p.inplace_outliers);
+        s->setLinearMode(p.linear_mode);
+        s->setDither(p.dither);
+        s->setDitherSeed(static_cast<uint64_t>(p.dither_seed));
+        s->setDitherStrength(static_cast<float>(p.dither_strength));
         return s;
     }
 };
