@@ -4,8 +4,11 @@
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
 struct BitshuffleParams {
-    int element_width = 4;      // bytes: 1, 2, 4, or 8; must match incoming data element type
-    int block_size    = 16384;  // bytes; must be multiple of 1024*element_width
+    // int64_t (not int): pressio_options::get() requires an exact type match
+    // and libpressio's Python layer always boxes int->int64_t, so narrower
+    // fields here would silently never be set.
+    int64_t element_width = 4;      // bytes: 1, 2, 4, or 8; must match incoming data element type
+    int64_t block_size    = 16384;  // bytes; must be multiple of 1024*element_width
     bool operator==(const BitshuffleParams& o) const {
         return element_width == o.element_width && block_size == o.block_size;
     }
@@ -21,8 +24,8 @@ public:
                           const StageContext& ctx) override {
         const auto& p = get_params(sid);
         auto* s = ctx.pipeline.addStage<fz::BitshuffleStage>();
-        s->setElementWidth(p.element_width);
-        s->setBlockSize(p.block_size);
+        s->setElementWidth(static_cast<size_t>(p.element_width));
+        s->setBlockSize(static_cast<size_t>(p.block_size));
         return s;
     }
 

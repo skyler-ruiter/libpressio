@@ -4,7 +4,10 @@
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
 struct BitpackParams {
-    int nbits = 0;  // 0 = stage default (full width); set to power-of-2 to save bits
+    // int64_t (not int): pressio_options::get() requires an exact type match
+    // and libpressio's Python layer always boxes int->int64_t, so a narrower
+    // field here would silently never be set.
+    int64_t nbits = 0;  // 0 = stage default (full width); set to power-of-2 to save bits
     bool operator==(const BitpackParams& o) const { return nbits == o.nbits; }
     bool operator!=(const BitpackParams& o) const { return !(*this == o); }
 };
@@ -22,17 +25,17 @@ public:
 
         if(t == "uint8") {
             auto* s = ctx.pipeline.addStage<fz::BitpackStage<uint8_t>>();
-            if(p.nbits > 0) s->setNBits(p.nbits);
+            if(p.nbits > 0) s->setNBits(static_cast<uint8_t>(p.nbits));
             return s;
         }
         if(t == "uint16") {
             auto* s = ctx.pipeline.addStage<fz::BitpackStage<uint16_t>>();
-            if(p.nbits > 0) s->setNBits(p.nbits);
+            if(p.nbits > 0) s->setNBits(static_cast<uint8_t>(p.nbits));
             return s;
         }
         if(t == "uint32") {
             auto* s = ctx.pipeline.addStage<fz::BitpackStage<uint32_t>>();
-            if(p.nbits > 0) s->setNBits(p.nbits);
+            if(p.nbits > 0) s->setNBits(static_cast<uint8_t>(p.nbits));
             return s;
         }
         throw std::runtime_error("Unsupported bitpack type: " + t);

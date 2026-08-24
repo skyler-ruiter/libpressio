@@ -24,6 +24,25 @@
 #include "stage_bitshuffle.h"
 #include "stage_bitpack.h"
 #include "stage_rze.h"
+#include "stage_tiled_lorenzo.h"
+#include "stage_adaptive_bitpack.h"
+#include "stage_rre.h"
+#include "stage_rare.h"
+#include "stage_raze.h"
+#include "stage_clog.h"
+#include "stage_hclog.h"
+#include "stage_gpulz.h"
+#include "stage_tupl.h"
+#include "stage_ans.h"
+#include "stage_adm.h"
+#include "stage_bitplane_rze.h"
+#include "stage_szx.h"
+#include "stage_szp.h"
+#include "stage_huffman.h"
+#include "stage_adaptive_lorenzo.h"
+#include "stage_log_transform.h"
+#include "stage_ginterp.h"
+#include "stage_roibin_split.h"
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
@@ -39,9 +58,15 @@ static const std::map<std::string, fz::MemoryStrategy> MEMORY_STRATEGIES {
 };
 
 static const std::map<std::string, fz::ErrorBoundMode> ERROR_BOUND_MODES {
-    {"abs", fz::ErrorBoundMode::ABS},
-    {"rel", fz::ErrorBoundMode::REL},
-    {"noa", fz::ErrorBoundMode::NOA},
+    {"abs",  fz::ErrorBoundMode::ABS},
+    {"rel",  fz::ErrorBoundMode::REL},
+    {"noa",  fz::ErrorBoundMode::NOA},
+    {"prel", fz::ErrorBoundMode::PREL},
+};
+
+static const std::map<std::string, fz::FusionPolicy> FUSION_POLICIES {
+    {"off",  fz::FusionPolicy::Off},
+    {"auto", fz::FusionPolicy::Auto},
 };
 
 template <class T>
@@ -116,10 +141,12 @@ struct PipelineState {
 // Pass dims=nullptr in config-file mode (the TOML sets dims internally).
 static void configure_pipeline_base(fz::Pipeline& p,
                                      const std::array<size_t,3>* dims,
-                                     int num_streams) {
+                                     int num_streams,
+                                     fz::FusionPolicy fusion_policy) {
     // Decompress ownership is chosen at the call site via decompressOwned(); no flag needed.
     if (dims) p.setDims(*dims);
     if (num_streams > 1) p.setNumStreams(num_streams);
+    p.setFusionPolicy(fusion_policy);
 }
 
 // Run warmup + graph capture after finalize(), if graph_mode is set.
@@ -170,6 +197,25 @@ public:
         v.push_back(std::make_unique<BitshuffleStageKind>());
         v.push_back(std::make_unique<BitpackStageKind>());
         v.push_back(std::make_unique<RZEStageKind>());
+        v.push_back(std::make_unique<TiledLorenzoStageKind>());
+        v.push_back(std::make_unique<AdaptiveBitpackStageKind>());
+        v.push_back(std::make_unique<RREStageKind>());
+        v.push_back(std::make_unique<RAREStageKind>());
+        v.push_back(std::make_unique<RAZEStageKind>());
+        v.push_back(std::make_unique<CLOGStageKind>());
+        v.push_back(std::make_unique<HCLOGStageKind>());
+        v.push_back(std::make_unique<GPULZStageKind>());
+        v.push_back(std::make_unique<TUPLStageKind>());
+        v.push_back(std::make_unique<ANSStageKind>());
+        v.push_back(std::make_unique<ADMStageKind>());
+        v.push_back(std::make_unique<BitplaneRZEStageKind>());
+        v.push_back(std::make_unique<SZxStageKind>());
+        v.push_back(std::make_unique<SZpStageKind>());
+        v.push_back(std::make_unique<HuffmanStageKind>());
+        v.push_back(std::make_unique<AdaptiveLorenzoStageKind>());
+        v.push_back(std::make_unique<LogTransformStageKind>());
+        v.push_back(std::make_unique<GInterpStageKind>());
+        v.push_back(std::make_unique<ROIBinSplitStageKind>());
         return v;
     }
 
@@ -188,6 +234,7 @@ public:
         set(options, "fzgpumodules:dims", pressio_data(dims_.begin(), dims_.end()));
         set(options, "fzgpumodules:num_streams", num_streams_);
         set(options, "fzgpumodules:graph_mode",  graph_mode_);
+        set(options, "fzgpumodules:fusion",      fusion_);
         set(options, "fzgpumodules:stages",               stages_);
         set(options, "fzgpumodules:connections",          connections_);
         set(options, "fzgpumodules:config_file",          config_file_);
@@ -208,12 +255,14 @@ public:
         set(options, "pressio:stability",    "experimental");
         set(options, "fzgpumodules:memory_strategy",  map_keys(MEMORY_STRATEGIES));
         set(options, "fzgpumodules:error_bound_mode", map_keys(ERROR_BOUND_MODES));
+        set(options, "fzgpumodules:fusion",           map_keys(FUSION_POLICIES));
         set(options, "predictors:error_dependent",
             std::vector<std::string>{"fzgpumodules:stages", "fzgpumodules:connections"});
         set(options, "predictors:error_agnostic",
             std::vector<std::string>{"fzgpumodules:stages", "fzgpumodules:connections"});
         set(options, "predictors:runtime",
-            std::vector<std::string>{"fzgpumodules:memory_strategy", "fzgpumodules:num_streams"});
+            std::vector<std::string>{"fzgpumodules:memory_strategy", "fzgpumodules:num_streams",
+                                      "fzgpumodules:fusion"});
         return options;
     }
 
@@ -226,11 +275,22 @@ public:
             "and `fzgpumodules:connections` (list of wiring strings). "
             "Set `fzgpumodules:dims` for multi-dimensional data (default: infer 1-D from input size).");
         set(options, "pressio:abs",
-            "Absolute error bound (or value-range fraction for noa mode)");
+            "Absolute error bound. Also holds the bound fraction for fzgpumodules:error_bound_mode "
+            "'noa' (value-range fraction) and 'prel' (fraction of max|data|).");
         set(options, "pressio:rel",
             "Point-wise relative error bound (used when fzgpumodules:error_bound_mode is 'rel')");
         set(options, "fzgpumodules:error_bound_mode",
-            "Error bound mode: abs (default), rel, or noa");
+            "Error bound mode: abs (default), rel, noa, or prel.\n"
+            "  abs  — absolute error bound (pressio:abs).\n"
+            "  rel  — point-wise relative bound (pressio:rel). Exact for QuantizerStage-backed "
+            "stages. Stages that quantize a fused prediction residual against one global "
+            "tolerance (e.g. the lorenzo:float/double tokens, which build LorenzoQuantStage) "
+            "cannot honor an exact point-wise bound: they treat 'rel' as a deprecated alias "
+            "for 'prel' and log a warning. Use 'prel' explicitly on those stages to silence it.\n"
+            "  noa  — value-range relative bound (pressio:abs as a fraction of the data's value range).\n"
+            "  prel — pseudo-relative: abs_eb = pressio:abs * max(|data|), applied as a single "
+            "absolute bound. This is the honest name for what 'rel' silently did on fused "
+            "prediction stages before the REL/PREL split.");
         set(options, "fzgpumodules:memory_strategy",
             "GPU memory allocation strategy: preallocate or minimal (default)");
         set(options, "fzgpumodules:memory_multiplier",
@@ -249,16 +309,42 @@ public:
             "buffers. decompress() reads from those live GPU buffers (the most recent "
             "compress() result); the compressed_input bytes are not parsed. "
             "Cross-machine or cross-process decompression is not supported in graph mode.");
+        set(options, "fzgpumodules:fusion",
+            "Kernel fusion policy: off (default) or auto. auto lets the pipeline planner "
+            "fuse eligible adjacent stages into single kernels for lower launch overhead "
+            "and less intermediate GPU traffic. May disable CUDA graph mode and buffer "
+            "coloring for the fused groups (see FZGPUModules fusion docs). "
+            "The environment variable FZ_FUSION=off|auto, if set, overrides this option "
+            "at pipeline-build time.");
         set(options, "fzgpumodules:stages",
             "Ordered list of stage tokens.\n"
             "Quantizing:        lorenzo:float:uint8/uint16, lorenzo:double:uint16/uint32,\n"
             "                   quantizer:float:uint16/uint32, quantizer:double:uint16/uint32.\n"
             "Integer Lorenzo:   lorenzo:int8, lorenzo:int16, lorenzo:int32, lorenzo:int64.\n"
-            "Transforms:        zigzag:int8/16/32/64, negabinary:int8/16/32/64.\n"
+            "Tiled predictor:   tiled_lorenzo:int16, tiled_lorenzo:int32 (dimension-aware,\n"
+            "                   separable Lorenzo; tile-major output for AdaptiveBitpack).\n"
+            "Fused lossy:       szx:float, szx:double, szp:float, szp:double (block-local,\n"
+            "                   abs/noa error only); adaptive_lorenzo:int16/32 (lossless,\n"
+            "                   1 in/3 out fwd); ginterp (cuSZ-Hi interpolation, 2-D/3-D only,\n"
+            "                   1 in/4 out fwd).\n"
+            "Transforms:        zigzag:int8/16/32/64, negabinary:int8/16/32/64, adm:uint16/uint32,\n"
+            "                   log_transform (float, exact point-wise rel bound, 1 in/4 out fwd).\n"
             "Difference:        diff:float, diff:double, diff:uint8/16/32, diff:int32/64,\n"
             "                   diff:int8:uint8, diff:int16:uint16, diff:int32:uint32, diff:int64:uint64.\n"
-            "Entropy coders:    rle:uint8/16/32, bitpack:uint8/16/32.\n"
-            "Byte-level:        bitshuffle, rze.");
+            "Entropy coders:    rle:uint8/16/32, bitpack:uint8/16/32, adaptive_bitpack:int16/32,\n"
+            "                   huffman:uint8/16/32, ans.\n"
+            "LC byte reducers:  rze, rre, rare, raze, clog, hclog (all take chunk_size/word_size).\n"
+            "Byte-level:        bitshuffle, gpulz, tupl, bitplane_rze (fixed uint16 input).\n"
+            "Structural:        roibin_split:float/double (needs fzgpumodules:sN:peaks_file,\n"
+            "                   1 in/3 out fwd).\n"
+            "The stages marked 'N in/M out fwd' above have a port count that swaps with\n"
+            "direction (M in/N out on decompress) — Pipeline::buildInverseDAG() reconciles\n"
+            "this transparently, nothing special to configure.\n"
+            "See each stage's fzgpumodules:sN:<param> documentation (get_documentation) for "
+            "per-stage tuning knobs, or the TOML config_file path for stages not listed here "
+            "(Merge, GPULZ split_mode — these need the stage's forward port count to *grow* "
+            "after construction based on a config value, which addRawStage() doesn't support "
+            "since it captures port counts once, right after addStage() returns).");
         set(options, "fzgpumodules:connections",
             "Wiring strings of the form 'sN <- sM' or 'sN <- sM:port'.");
         set(options, "fzgpumodules:config_file",
@@ -278,7 +364,14 @@ public:
         set(options, "fzgpumodules:peak_memory",
             "[Output] Peak GPU memory usage from last compression (bytes)");
         set(options, "fzgpumodules:execution_time_us",
-            "[Output] Execution time from last compression (microseconds)");
+            "[Output] Execution time from last compression (microseconds). Stream-synchronized "
+            "device kernel time only — excludes host<->device staging and pipeline (re)build "
+            "cost; see fzgpumodules:rebuilt to check whether the latter applies to this call.");
+        set(options, "fzgpumodules:rebuilt",
+            "[Output] True if the last compress() call (re)built the pipeline (first call, "
+            "dirty options, or — in manual-pipeline mode — a changed input size) rather than "
+            "reusing the cached one. execution_time_us excludes build cost either way, so a "
+            "timing loop should discard measurements where this is true, or warm up first.");
 
         if (config_file_.empty()) {
             for_each_stage([&](StageKind& sk, const std::string& sid, const std::string& tok) {
@@ -310,7 +403,7 @@ public:
                                 "'. Valid: preallocate, minimal");
         }
 
-        float old_mult = memory_multiplier_;
+        double old_mult = memory_multiplier_;
         get(options, "fzgpumodules:memory_multiplier", &memory_multiplier_);
 
         std::string old_mode = error_bound_mode_;
@@ -319,7 +412,7 @@ public:
             auto invalid = error_bound_mode_;
             error_bound_mode_ = old_mode;
             return set_error(1, "Invalid fzgpumodules:error_bound_mode: '" + invalid +
-                                "'. Valid: abs, rel, noa");
+                                "'. Valid: abs, rel, noa, prel");
         }
 
         auto old_dims = dims_;
@@ -331,11 +424,20 @@ public:
             for(size_t i = 0; i < std::min(v.size(), size_t(3)); i++) dims_[i] = v[i];
         }
 
-        int old_streams = num_streams_;
+        int64_t old_streams = num_streams_;
         get(options, "fzgpumodules:num_streams", &num_streams_);
 
         bool old_graph = graph_mode_;
         get(options, "fzgpumodules:graph_mode", &graph_mode_);
+
+        std::string old_fusion = fusion_;
+        get(options, "fzgpumodules:fusion", &fusion_);
+        if(!FUSION_POLICIES.contains(fusion_)) {
+            auto invalid = fusion_;
+            fusion_ = old_fusion;
+            return set_error(1, "Invalid fzgpumodules:fusion: '" + invalid +
+                                "'. Valid: off, auto");
+        }
 
         std::string old_config_file = config_file_;
         get(options, "fzgpumodules:config_file", &config_file_);
@@ -353,6 +455,7 @@ public:
            error_bound_abs_ != old_abs || error_bound_rel_ != old_rel ||
            error_bound_mode_ != old_mode || dims_ != old_dims ||
            num_streams_ != old_streams || graph_mode_ != old_graph ||
+           fusion_ != old_fusion ||
            config_file_ != old_config_file || expose_stage_outputs_ != old_expose ||
            stage_params_changed)
         {
@@ -426,6 +529,7 @@ public:
         pressio_options metrics;
         set(metrics, "fzgpumodules:peak_memory",       last_peak_memory_);
         set(metrics, "fzgpumodules:execution_time_us", last_execution_time_us_);
+        set(metrics, "fzgpumodules:rebuilt",           last_rebuilt_);
         for(auto& [sid, count] : last_outlier_counts_)
             set(metrics, "fzgpumodules:" + sid + ":outlier_count", count);
         for(auto& [key, val] : last_stage_outputs_)
@@ -451,9 +555,9 @@ private:
             : MEMORY_STRATEGIES.at(memory_strategy_);
 
         state_.outlier_stages.clear();
-        state_.ptr.reset(new fz::Pipeline(data_size, strategy, memory_multiplier_));
+        state_.ptr.reset(new fz::Pipeline(data_size, strategy, static_cast<float>(memory_multiplier_)));
         const std::array<size_t,3> fz_dims = {dims_[0], dims_[1], dims_[2]};
-        configure_pipeline_base(*state_.ptr, &fz_dims, num_streams_);
+        configure_pipeline_base(*state_.ptr, &fz_dims, static_cast<int>(num_streams_), FUSION_POLICIES.at(fusion_));
 
         StageContext ctx{
             *state_.ptr,
@@ -531,8 +635,8 @@ private:
             : MEMORY_STRATEGIES.at(memory_strategy_);
 
         state_.outlier_stages.clear();
-        state_.ptr.reset(new fz::Pipeline(0, strategy, memory_multiplier_));
-        configure_pipeline_base(*state_.ptr, nullptr, num_streams_);
+        state_.ptr.reset(new fz::Pipeline(0, strategy, static_cast<float>(memory_multiplier_)));
+        configure_pipeline_base(*state_.ptr, nullptr, static_cast<int>(num_streams_), FUSION_POLICIES.at(fusion_));
 
         if (graph_mode_)
             state_.ptr->enableGraphMode(true);
@@ -556,6 +660,7 @@ private:
         // on data_size change. Manual pipelines must rebuild when data size changes.
         bool need_rebuild = state_.dirty || !state_.ptr ||
                             (config_file_.empty() && data_size != state_.last_size);
+        last_rebuilt_ = need_rebuild;
         if(need_rebuild) {
             try {
                 if (!config_file_.empty())
@@ -739,9 +844,14 @@ private:
     std::string error_bound_mode_  = "abs";
 
     std::string memory_strategy_   = "minimal";
-    float       memory_multiplier_ = 3.0f;
+    // double/int64_t (not float/int): libpressio's Python layer boxes every
+    // Python float as C++ double and every Python int as C++ int64_t, and
+    // pressio_options::get() requires an exact type match — no numeric
+    // coercion — so a narrower field here would silently never be set.
+    double      memory_multiplier_ = 3.0;
+    std::string fusion_            = "off";
     std::vector<size_t> dims_      = {0, 1, 1};
-    int         num_streams_       = 1;
+    int64_t     num_streams_       = 1;
 
     std::vector<std::string> stages_      = {"lorenzo:float:uint16", "diff:uint16"};
     std::vector<std::string> connections_ = {"s1 <- s0:codes"};
@@ -752,6 +862,7 @@ private:
 
     size_t  last_peak_memory_       = 0;
     int64_t last_execution_time_us_ = 0;
+    bool    last_rebuilt_           = false;  // did the last compress() rebuild the pipeline?
     std::map<std::string, int64_t>    last_outlier_counts_;
     std::map<std::string, pressio_data> last_stage_outputs_;
 };

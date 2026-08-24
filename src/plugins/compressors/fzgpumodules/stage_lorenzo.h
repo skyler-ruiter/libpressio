@@ -5,15 +5,20 @@
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
 struct LorenzoParams {
-    int   quant_radius     = 32768;
-    float outlier_capacity = 0.2f;
-    bool  zigzag_codes     = false;
-    float value_base       = 0.0f;  // 0 = auto-scan; >0 = skip scan (NOA: value_range, REL: max|data|)
+    // int64_t/double (not int/float): pressio_options::get() requires an exact
+    // type match and libpressio's Python layer always boxes int->int64_t,
+    // float->double, so narrower fields here would silently never be set.
+    int64_t quant_radius     = 32768;
+    double  outlier_capacity = 0.2;
+    bool    zigzag_codes     = false;
+    double  value_base       = 0.0;  // 0 = auto-scan; >0 = skip scan (NOA: value_range, PREL: max|data|)
+    bool    centering        = false; // per-tile mean centering (FSZ); 1-D only
     bool operator==(const LorenzoParams& o) const {
         return quant_radius == o.quant_radius &&
                outlier_capacity == o.outlier_capacity &&
                zigzag_codes == o.zigzag_codes &&
-               value_base == o.value_base;
+               value_base == o.value_base &&
+               centering == o.centering;
     }
     bool operator!=(const LorenzoParams& o) const { return !(*this == o); }
 };
@@ -52,6 +57,7 @@ public:
         opts.set("fzgpumodules:" + sid + ":outlier_capacity", p.outlier_capacity);
         opts.set("fzgpumodules:" + sid + ":zigzag_codes",     p.zigzag_codes);
         opts.set("fzgpumodules:" + sid + ":value_base",       p.value_base);
+        opts.set("fzgpumodules:" + sid + ":centering",        p.centering);
     }
 
     bool read_options(const pressio_options& opts,
@@ -65,6 +71,7 @@ public:
         opts.get("fzgpumodules:" + sid + ":outlier_capacity", &p.outlier_capacity);
         opts.get("fzgpumodules:" + sid + ":zigzag_codes",     &p.zigzag_codes);
         opts.get("fzgpumodules:" + sid + ":value_base",       &p.value_base);
+        opts.get("fzgpumodules:" + sid + ":centering",        &p.centering);
         return p != old;
     }
 
@@ -83,7 +90,12 @@ public:
         opts.set("fzgpumodules:" + sid + ":zigzag_codes",
             std::string("Zigzag-encode codes before downstream storage"));
         opts.set("fzgpumodules:" + sid + ":value_base",
-            std::string("Pre-computed value_range (NOA) or max(|data|) (REL) to skip data scan; 0 = auto"));
+            std::string("Pre-computed value_range (NOA) or max(|data|) (PREL) to skip data scan; 0 = auto"));
+        opts.set("fzgpumodules:" + sid + ":centering",
+            std::string("Per-tile mean centering (FSZ adaptive centering): predict each 1024-element "
+                         "tile's first element from the tile mean instead of 0. Helps fields with a "
+                         "large constant offset (e.g. temperature in Kelvin). 1-D only — rejected by "
+                         "the engine if combined with 2-D/3-D dims. Default: false."));
     }
 
 private:
@@ -105,13 +117,20 @@ private:
     template<typename TIn, typename TCode>
     fz::Stage* make(const std::string& sid, const StageContext& ctx) {
         const auto& p = get_params(sid);
-        auto* s = ctx.pipeline.addStage<fz::LorenzoQuantStage<TIn, TCode>>();
-        s->setErrorBound(static_cast<TIn>(ctx.eb));
+        // Centering adds a "means" output port that addStage() captures at
+        // construction time, so it (and everything else) is passed via Config
+        // rather than set on the stage pointer after the fact.
+        typename fz::LorenzoQuantStage<TIn, TCode>::Config config;
+        config.error_bound       = static_cast<float>(ctx.eb);
+        config.quant_radius      = static_cast<int>(p.quant_radius);
+        config.outlier_capacity  = static_cast<float>(p.outlier_capacity);
+        config.zigzag_codes      = p.zigzag_codes;
+        config.centering         = p.centering;
+        if(p.value_base > 0.0) config.precomputed_value_base = static_cast<float>(p.value_base);
+        auto* s = ctx.pipeline.addStage<fz::LorenzoQuantStage<TIn, TCode>>(config);
+        // eb_mode goes through the setter so the REL->PREL deprecation-alias
+        // warning (resolveApproxRelMode) still fires when applicable.
         s->setErrorBoundMode(ctx.eb_mode);
-        s->setQuantRadius(p.quant_radius);
-        s->setOutlierCapacity(p.outlier_capacity);
-        s->setZigzagCodes(p.zigzag_codes);
-        if(p.value_base > 0.0f) s->setValueBase(p.value_base);
         return s;
     }
 };

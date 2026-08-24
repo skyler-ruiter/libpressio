@@ -4,8 +4,11 @@
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
 struct RZEParams {
-    int chunk_size = 16384;  // bytes; 4096, 8192, or 16384
-    int word_size  = 1;      // LC RZE_N word granularity: 1, 2, 4, or 8
+    // int64_t (not int): pressio_options::get() requires an exact type match
+    // and libpressio's Python layer always boxes int->int64_t, so narrower
+    // fields here would silently never be set.
+    int64_t chunk_size = 16384;  // bytes; 4096, 8192, or 16384
+    int64_t word_size  = 1;      // LC RZE_N word granularity: 1, 2, 4, or 8
     bool operator==(const RZEParams& o) const {
         return chunk_size == o.chunk_size && word_size == o.word_size;
     }
@@ -21,8 +24,8 @@ public:
                           const StageContext& ctx) override {
         const auto& p = get_params(sid);
         auto* s = ctx.pipeline.addStage<fz::RZEStage>();
-        s->setChunkSize(p.chunk_size);
-        s->setWordSize(p.word_size);
+        s->setChunkSize(static_cast<size_t>(p.chunk_size));
+        s->setWordSize(static_cast<size_t>(p.word_size));
         return s;
     }
 
