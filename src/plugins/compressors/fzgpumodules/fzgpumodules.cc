@@ -43,6 +43,9 @@
 #include "stage_log_transform.h"
 #include "stage_ginterp.h"
 #include "stage_roibin_split.h"
+#include "stage_cdf97.h"
+#include "stage_speck2d.h"
+#include "stage_outlier_correct.h"
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
@@ -216,6 +219,9 @@ public:
         v.push_back(std::make_unique<LogTransformStageKind>());
         v.push_back(std::make_unique<GInterpStageKind>());
         v.push_back(std::make_unique<ROIBinSplitStageKind>());
+        v.push_back(std::make_unique<Cdf97StageKind>());
+        v.push_back(std::make_unique<Speck2DStageKind>());
+        v.push_back(std::make_unique<Cdf97OutlierCorrectStageKind>());
         return v;
     }
 
@@ -237,6 +243,7 @@ public:
         set(options, "fzgpumodules:fusion",      fusion_);
         set(options, "fzgpumodules:stages",               stages_);
         set(options, "fzgpumodules:connections",          connections_);
+        set(options, "fzgpumodules:primary_source",       primary_source_);
         set(options, "fzgpumodules:config_file",          config_file_);
         set(options, "fzgpumodules:expose_stage_outputs", expose_stage_outputs_);
 
@@ -337,6 +344,15 @@ public:
             "Byte-level:        bitshuffle, gpulz, tupl, bitplane_rze (fixed uint16 input).\n"
             "Structural:        roibin_split:float/double (needs fzgpumodules:sN:peaks_file,\n"
             "                   1 in/3 out fwd).\n"
+            "SPERR:             cdf97:float/double (CDF 9/7 DWT, not itself lossy — pairs with\n"
+            "                   quantizer), speck2d (2-D bit-plane coder, no options),\n"
+            "                   cdf97_outlier_correct (sparse exact correction — GUARANTEES the\n"
+            "                   pointwise bound quantizing DWT coefficients alone does not; error\n"
+            "                   bound is read from the same pressio:abs/rel as everything else, so\n"
+            "                   it automatically matches a paired quantizer token; needs the raw\n"
+            "                   input bound directly — see fzgpumodules:connections and\n"
+            "                   fzgpumodules:primary_source below). Full recipe in\n"
+            "                   docs/libpressio_python.md.\n"
             "The stages marked 'N in/M out fwd' above have a port count that swaps with\n"
             "direction (M in/N out on decompress) — Pipeline::buildInverseDAG() reconciles\n"
             "this transparently, nothing special to configure.\n"
@@ -346,7 +362,18 @@ public:
             "after construction based on a config value, which addRawStage() doesn't support "
             "since it captures port counts once, right after addStage() returns).");
         set(options, "fzgpumodules:connections",
-            "Wiring strings of the form 'sN <- sM' or 'sN <- sM:port'.");
+            "Wiring strings of the form 'sN <- sM' or 'sN <- sM:port'. The reserved source name "
+            "'__external__' binds the pipeline's raw input directly to sN's next input port "
+            "(Pipeline::bindExternalInput()) instead of another stage's output — e.g. "
+            "'s2 <- __external__' — for a stage that needs the untouched original input on one "
+            "port while another port connects normally (cdf97_outlier_correct's shape). See "
+            "fzgpumodules:primary_source when this creates more than one source stage.");
+        set(options, "fzgpumodules:primary_source",
+            "Stage id (e.g. 's2') whose inverse output decompress() returns, for pipelines with "
+            "more than one source stage (see the '__external__' connection above). Empty string "
+            "(default) uses the sole/first-discovered source, which is almost never what you want "
+            "once a second source exists — set this explicitly whenever fzgpumodules:connections "
+            "contains a '__external__' entry alongside a stage that also has a real connection.");
         set(options, "fzgpumodules:config_file",
             "Path to a TOML pipeline config file. When non-empty, the file is the source of "
             "truth for stages, connections, dims, and per-stage error bounds. Options "
@@ -391,8 +418,10 @@ public:
         get(options, "pressio:rel", &error_bound_rel_);
 
         auto old_stages = stages_, old_conns = connections_;
-        get(options, "fzgpumodules:stages",      &stages_);
-        get(options, "fzgpumodules:connections", &connections_);
+        auto old_primary_source = primary_source_;
+        get(options, "fzgpumodules:stages",         &stages_);
+        get(options, "fzgpumodules:connections",    &connections_);
+        get(options, "fzgpumodules:primary_source", &primary_source_);
 
         std::string old_strategy = memory_strategy_;
         get(options, "fzgpumodules:memory_strategy", &memory_strategy_);
@@ -451,6 +480,7 @@ public:
         });
 
         if(stages_ != old_stages || connections_ != old_conns ||
+           primary_source_ != old_primary_source ||
            memory_strategy_ != old_strategy || memory_multiplier_ != old_mult ||
            error_bound_abs_ != old_abs || error_bound_rel_ != old_rel ||
            error_bound_mode_ != old_mode || dims_ != old_dims ||
@@ -586,11 +616,24 @@ private:
 
         for(auto& conn_str : connections_) {
             auto c = parse_connection(conn_str);
+            if(c.from == "__external__") {
+                // Bind the pipeline's raw input directly to this port, even
+                // though 'to' may also have other real connections (e.g.
+                // cdf97_outlier_correct). Port position follows the same
+                // connection-order convention as every other wiring string
+                // here -- list "sN <- __external__" before any "sN <- sM"
+                // entry that should land on a later port of the same stage.
+                state_.ptr->bindExternalInput(ptrs.at(c.to));
+                continue;
+            }
             if(c.port.empty())
                 state_.ptr->connect(ptrs.at(c.to), ptrs.at(c.from));
             else
                 state_.ptr->connect(ptrs.at(c.to), ptrs.at(c.from), c.port);
         }
+
+        if(!primary_source_.empty())
+            state_.ptr->setPrimarySource(ptrs.at(primary_source_));
 
         // Build ordered list of terminal (unconnected) output ports for expose_stage_outputs.
         // A port is terminal if no connection names it as the 'from' source.
@@ -859,9 +902,16 @@ private:
     std::vector<size_t> dims_      = {0, 1, 1};
     int64_t     num_streams_       = 1;
 
-    std::vector<std::string> stages_      = {"lorenzo:float:uint16", "diff:uint16"};
-    std::vector<std::string> connections_ = {"s1 <- s0:codes"};
-    std::string              config_file_ = "";
+    std::vector<std::string> stages_        = {"lorenzo:float:uint16", "diff:uint16"};
+    std::vector<std::string> connections_   = {"s1 <- s0:codes"};
+    // "" = default (Pipeline::setPrimarySource() not called; the sole/
+    // first-discovered source is used). Set to a stage id ("s2") to pick a
+    // specific stage's inverse output as decompress()'s answer -- needed for
+    // pipelines with more than one source stage, e.g. the SPERR recipe
+    // (docs/libpressio_python.md) where "s2 <- __external__" alongside
+    // "s2 <- s1:codes" makes cdf97_outlier_correct a second source.
+    std::string               primary_source_ = "";
+    std::string              config_file_   = "";
 
     bool    graph_mode_             = false;
     bool    expose_stage_outputs_   = false;
