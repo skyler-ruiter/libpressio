@@ -33,7 +33,7 @@ include(GoogleTest)
 function(add_gtest)
   get_filename_component(test_name ${ARGV0} NAME_WE)
   add_executable(${test_name} ${ARGV})
-  target_link_libraries(${test_name} PRIVATE libpressio gtest_main gtest gmock)
+  target_link_libraries(${test_name} PRIVATE libpressio GTest::gtest_main GTest::gtest GTest::gmock)
   gtest_discover_tests(${test_name})
 endfunction()
 
@@ -155,6 +155,9 @@ endif()
 
 if(LIBPRESSIO_HAS_FZGPUMODULES)
   add_gtest(test_fzgm.cc)
+  target_compile_definitions(test_fzgm PRIVATE
+    LIBPRESSIO_FZGM_HAS_ADM=$<BOOL:${LIBPRESSIO_FZGM_HAS_ADM}>
+    LIBPRESSIO_FZGM_HAS_SZP=$<BOOL:${LIBPRESSIO_FZGM_HAS_SZP}>)
 
   if(BUILD_PYTHON_WRAPPER)
     find_package(Python3)

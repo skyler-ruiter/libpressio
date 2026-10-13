@@ -34,10 +34,14 @@
 #include "stage_gpulz.h"
 #include "stage_tupl.h"
 #include "stage_ans.h"
+#if LIBPRESSIO_FZGM_HAS_ADM
 #include "stage_adm.h"
+#endif
 #include "stage_bitplane_rze.h"
 #include "stage_szx.h"
+#if LIBPRESSIO_FZGM_HAS_SZP
 #include "stage_szp.h"
+#endif
 #include "stage_huffman.h"
 #include "stage_adaptive_lorenzo.h"
 #include "stage_log_transform.h"
@@ -67,9 +71,9 @@ static const std::map<std::string, fz::ErrorBoundMode> ERROR_BOUND_MODES {
     {"prel", fz::ErrorBoundMode::PREL},
 };
 
-static const std::map<std::string, fz::FusionPolicy> FUSION_POLICIES {
-    {"off",  fz::FusionPolicy::Off},
-    {"auto", fz::FusionPolicy::Auto},
+static const std::map<std::string, fz::SpecializationPolicy> SPECIALIZATION_POLICIES {
+    {"off",  fz::SpecializationPolicy::Off},
+    {"auto", fz::SpecializationPolicy::Auto},
 };
 
 template <class T>
@@ -145,11 +149,11 @@ struct PipelineState {
 static void configure_pipeline_base(fz::Pipeline& p,
                                      const std::array<size_t,3>* dims,
                                      int num_streams,
-                                     fz::FusionPolicy fusion_policy) {
+                                     fz::SpecializationPolicy specialization_policy) {
     // Decompress ownership is chosen at the call site via decompressOwned(); no flag needed.
     if (dims) p.setDims(*dims);
     if (num_streams > 1) p.setNumStreams(num_streams);
-    p.setFusionPolicy(fusion_policy);
+    p.setSpecializationPolicy(specialization_policy);
 }
 
 // Run warmup + graph capture after finalize(), if graph_mode is set.
@@ -210,10 +214,14 @@ public:
         v.push_back(std::make_unique<GPULZStageKind>());
         v.push_back(std::make_unique<TUPLStageKind>());
         v.push_back(std::make_unique<ANSStageKind>());
+#if LIBPRESSIO_FZGM_HAS_ADM
         v.push_back(std::make_unique<ADMStageKind>());
+#endif
         v.push_back(std::make_unique<BitplaneRZEStageKind>());
         v.push_back(std::make_unique<SZxStageKind>());
+#if LIBPRESSIO_FZGM_HAS_SZP
         v.push_back(std::make_unique<SZpStageKind>());
+#endif
         v.push_back(std::make_unique<HuffmanStageKind>());
         v.push_back(std::make_unique<AdaptiveLorenzoStageKind>());
         v.push_back(std::make_unique<LogTransformStageKind>());
@@ -240,7 +248,7 @@ public:
         set(options, "fzgpumodules:dims", pressio_data(dims_.begin(), dims_.end()));
         set(options, "fzgpumodules:num_streams", num_streams_);
         set(options, "fzgpumodules:graph_mode",  graph_mode_);
-        set(options, "fzgpumodules:fusion",      fusion_);
+        set(options, "fzgpumodules:specialization", specialization_);
         set(options, "fzgpumodules:stages",               stages_);
         set(options, "fzgpumodules:connections",          connections_);
         set(options, "fzgpumodules:primary_source",       primary_source_);
@@ -262,14 +270,14 @@ public:
         set(options, "pressio:stability",    "experimental");
         set(options, "fzgpumodules:memory_strategy",  map_keys(MEMORY_STRATEGIES));
         set(options, "fzgpumodules:error_bound_mode", map_keys(ERROR_BOUND_MODES));
-        set(options, "fzgpumodules:fusion",           map_keys(FUSION_POLICIES));
+        set(options, "fzgpumodules:specialization", map_keys(SPECIALIZATION_POLICIES));
         set(options, "predictors:error_dependent",
             std::vector<std::string>{"fzgpumodules:stages", "fzgpumodules:connections"});
         set(options, "predictors:error_agnostic",
             std::vector<std::string>{"fzgpumodules:stages", "fzgpumodules:connections"});
         set(options, "predictors:runtime",
             std::vector<std::string>{"fzgpumodules:memory_strategy", "fzgpumodules:num_streams",
-                                      "fzgpumodules:fusion"});
+                                      "fzgpumodules:specialization"});
         return options;
     }
 
@@ -316,13 +324,13 @@ public:
             "buffers. decompress() reads from those live GPU buffers (the most recent "
             "compress() result); the compressed_input bytes are not parsed. "
             "Cross-machine or cross-process decompression is not supported in graph mode.");
-        set(options, "fzgpumodules:fusion",
-            "Kernel fusion policy: off (default) or auto. auto lets the pipeline planner "
-            "fuse eligible adjacent stages into single kernels for lower launch overhead "
-            "and less intermediate GPU traffic. May disable CUDA graph mode and buffer "
-            "coloring for the fused groups (see FZGPUModules fusion docs). "
-            "The environment variable FZ_FUSION=off|auto, if set, overrides this option "
-            "at pipeline-build time.");
+        set(options, "fzgpumodules:specialization",
+            "Pipeline Specialization policy: off (default) or auto. Auto installs admitted "
+            "implementations for supported stage combinations and otherwise uses staged execution. "
+            "It is not a per-input profitability predictor and is mutually exclusive with CUDA Graph mode. "
+            "FZ_SPECIALIZE overrides the policy at pipeline-build time. "
+            "Inspect specialization_* metrics after encode/decode to confirm installation. "
+            "Use fzgpumodules:specialization in Python and C++ configurations.");
         set(options, "fzgpumodules:stages",
             "Ordered list of stage tokens.\n"
             "Quantizing:        lorenzo:float:uint8/uint16, lorenzo:double:uint16/uint32,\n"
@@ -330,11 +338,19 @@ public:
             "Integer Lorenzo:   lorenzo:int8, lorenzo:int16, lorenzo:int32, lorenzo:int64.\n"
             "Tiled predictor:   tiled_lorenzo:int16, tiled_lorenzo:int32 (dimension-aware,\n"
             "                   separable Lorenzo; tile-major output for AdaptiveBitpack).\n"
-            "Fused lossy:       szx:float, szx:double, szp:float, szp:double (block-local,\n"
+            "Fused lossy:       szx:float, szx:double"
+#if LIBPRESSIO_FZGM_HAS_SZP
+            ", szp:float, szp:double"
+#endif
+            " (block-local,\n"
             "                   abs/noa error only); adaptive_lorenzo:int16/32 (lossless,\n"
             "                   1 in/3 out fwd); ginterp (cuSZ-Hi interpolation, 2-D/3-D only,\n"
             "                   1 in/4 out fwd).\n"
-            "Transforms:        zigzag:int8/16/32/64, negabinary:int8/16/32/64, adm:uint16/uint32,\n"
+            "Transforms:        zigzag:int8/16/32/64, negabinary:int8/16/32/64"
+#if LIBPRESSIO_FZGM_HAS_ADM
+            ", adm:uint16/uint32"
+#endif
+            ",\n"
             "                   log_transform (float, exact point-wise rel bound, 1 in/4 out fwd).\n"
             "Difference:        diff:float, diff:double, diff:uint8/16/32, diff:int32/64,\n"
             "                   diff:int8:uint8, diff:int16:uint16, diff:int32:uint32, diff:int64:uint64.\n"
@@ -459,14 +475,18 @@ public:
         bool old_graph = graph_mode_;
         get(options, "fzgpumodules:graph_mode", &graph_mode_);
 
-        std::string old_fusion = fusion_;
-        get(options, "fzgpumodules:fusion", &fusion_);
-        if(!FUSION_POLICIES.contains(fusion_)) {
-            auto invalid = fusion_;
-            fusion_ = old_fusion;
-            return set_error(1, "Invalid fzgpumodules:fusion: '" + invalid +
+        std::string removed_fusion;
+        if (get(options, "fzgpumodules:fusion", &removed_fusion) != pressio_options_key_does_not_exist)
+            return set_error(1, "fzgpumodules:fusion was removed; use fzgpumodules:specialization");
+        const std::string old_specialization = specialization_;
+        std::string requested_specialization = specialization_;
+        auto status = get(options, "fzgpumodules:specialization", &requested_specialization);
+        if (status == pressio_options_key_exists)
+            return set_error(1, "fzgpumodules:specialization must be a string");
+        if (!SPECIALIZATION_POLICIES.contains(requested_specialization))
+            return set_error(1, "Invalid fzgpumodules:specialization: '" + requested_specialization +
                                 "'. Valid: off, auto");
-        }
+        specialization_ = requested_specialization;
 
         std::string old_config_file = config_file_;
         get(options, "fzgpumodules:config_file", &config_file_);
@@ -485,7 +505,7 @@ public:
            error_bound_abs_ != old_abs || error_bound_rel_ != old_rel ||
            error_bound_mode_ != old_mode || dims_ != old_dims ||
            num_streams_ != old_streams || graph_mode_ != old_graph ||
-           fusion_ != old_fusion ||
+           specialization_ != old_specialization ||
            config_file_ != old_config_file || expose_stage_outputs_ != old_expose ||
            stage_params_changed)
         {
@@ -560,6 +580,25 @@ public:
         set(metrics, "fzgpumodules:peak_memory",       last_peak_memory_);
         set(metrics, "fzgpumodules:execution_time_us", last_execution_time_us_);
         set(metrics, "fzgpumodules:rebuilt",           last_rebuilt_);
+        // Inverse decisions become available after the first decode.
+        uint64_t forward_groups = 0, inverse_groups = 0;
+        std::vector<std::string> forward_impls, inverse_impls;
+        std::string fallback = "pipeline_not_built";
+        if (state_.ptr) {
+            const auto& info = state_.ptr->getSpecializationInfo();
+            forward_groups = info.installed_groups.size();
+            inverse_groups = info.installed_inverse_groups.size();
+            for (const auto& group : info.installed_groups)
+                forward_impls.push_back(group.implementation);
+            for (const auto& group : info.installed_inverse_groups)
+                inverse_impls.push_back(group.implementation);
+            fallback = info.fallback_reason;
+        }
+        set(metrics, "fzgpumodules:specialization_forward_groups", forward_groups);
+        set(metrics, "fzgpumodules:specialization_inverse_groups", inverse_groups);
+        set(metrics, "fzgpumodules:specialization_forward_implementations", forward_impls);
+        set(metrics, "fzgpumodules:specialization_inverse_implementations", inverse_impls);
+        set(metrics, "fzgpumodules:specialization_fallback_reason", fallback);
         for(auto& [sid, count] : last_outlier_counts_)
             set(metrics, "fzgpumodules:" + sid + ":outlier_count", count);
         for(auto& [key, val] : last_stage_outputs_)
@@ -587,7 +626,7 @@ private:
         state_.outlier_stages.clear();
         state_.ptr.reset(new fz::Pipeline(data_size, strategy, static_cast<float>(memory_multiplier_)));
         const std::array<size_t,3> fz_dims = {dims_[0], dims_[1], dims_[2]};
-        configure_pipeline_base(*state_.ptr, &fz_dims, static_cast<int>(num_streams_), FUSION_POLICIES.at(fusion_));
+        configure_pipeline_base(*state_.ptr, &fz_dims, static_cast<int>(num_streams_), SPECIALIZATION_POLICIES.at(specialization_));
 
         StageContext ctx{
             *state_.ptr,
@@ -679,7 +718,7 @@ private:
 
         state_.outlier_stages.clear();
         state_.ptr.reset(new fz::Pipeline(0, strategy, static_cast<float>(memory_multiplier_)));
-        configure_pipeline_base(*state_.ptr, nullptr, static_cast<int>(num_streams_), FUSION_POLICIES.at(fusion_));
+        configure_pipeline_base(*state_.ptr, nullptr, static_cast<int>(num_streams_), SPECIALIZATION_POLICIES.at(specialization_));
 
         if (graph_mode_)
             state_.ptr->enableGraphMode(true);
@@ -898,7 +937,7 @@ private:
     // pressio_options::get() requires an exact type match — no numeric
     // coercion — so a narrower field here would silently never be set.
     double      memory_multiplier_ = 3.0;
-    std::string fusion_            = "off";
+    std::string specialization_            = "off";
     std::vector<size_t> dims_      = {0, 1, 1};
     int64_t     num_streams_       = 1;
 

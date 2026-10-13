@@ -384,6 +384,33 @@ if(LIBPRESSIO_HAS_FZGPUMODULES)
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)
   find_package(FZGPUModules REQUIRED)
+  include(CheckCXXSourceCompiles)
+  include(CMakePushCheckState)
+  cmake_push_check_state(RESET)
+  get_target_property(_fzgm_public_includes FZGMOD::fzgmod INTERFACE_INCLUDE_DIRECTORIES)
+  if(TARGET FZGMOD::fzgmod_compile_settings)
+    get_target_property(_fzgm_shared_includes FZGMOD::fzgmod_compile_settings INTERFACE_INCLUDE_DIRECTORIES)
+    list(APPEND _fzgm_public_includes ${_fzgm_shared_includes})
+  endif()
+  set(CMAKE_REQUIRED_INCLUDES ${_fzgm_public_includes} ${CUDAToolkit_INCLUDE_DIRS})
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_CXX17_STANDARD_COMPILE_OPTION}")
+  # Recheck after SDK upgrades, including replacements at the same prefix.
+  unset(LIBPRESSIO_FZGM_PUBLIC_API_USABLE CACHE)
+  unset(LIBPRESSIO_FZGM_HAS_ADM CACHE)
+  unset(LIBPRESSIO_FZGM_HAS_SZP CACHE)
+  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::Pipeline* p = nullptr; (void)p; }"
+    LIBPRESSIO_FZGM_PUBLIC_API_USABLE)
+  if(NOT LIBPRESSIO_FZGM_PUBLIC_API_USABLE)
+    message(FATAL_ERROR "The installed FZGPUModules public header cannot be compiled")
+  endif()
+  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::ADMStage* p = nullptr; (void)p; }"
+    LIBPRESSIO_FZGM_HAS_ADM)
+  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::SZpStage<float>* p = nullptr; (void)p; }"
+    LIBPRESSIO_FZGM_HAS_SZP)
+  cmake_pop_check_state()
+  target_compile_definitions(libpressio PRIVATE
+    LIBPRESSIO_FZGM_HAS_ADM=$<BOOL:${LIBPRESSIO_FZGM_HAS_ADM}>
+    LIBPRESSIO_FZGM_HAS_SZP=$<BOOL:${LIBPRESSIO_FZGM_HAS_SZP}>)
   set(LIBPRESSIO_COMPRESSORS "${LIBPRESSIO_COMPRESSORS} fzgpumodules")
   libpressio_plugin_file(/compressors/fzgpumodules/fzgpumodules.cc)
   target_link_libraries(libpressio PRIVATE FZGMOD::fzgmod)

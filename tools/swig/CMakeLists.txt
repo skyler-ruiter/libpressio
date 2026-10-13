@@ -3,6 +3,7 @@ find_package(Python3 COMPONENTS Interpreter Development NumPy)
 find_package(SWIG)
 if(SWIG_FOUND AND PYTHON3_FOUND)
   include(UseSWIG)
+  configure_file(libpressio.py libpressio.py COPYONLY)
 
 
   set(CMAKE_SWIG_FLAGS "-doxygen")

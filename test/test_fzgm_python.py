@@ -134,20 +134,84 @@ for token, dtype, needs_dims in [
             "fzgpumodules:stages": [token], "fzgpumodules:connections": []}}, data)
         check(f"{token} round-trip", ok, f"max_err={max_err}")
 
-# ── Fusion / PREL / centering (new options this session)
+# ── Specialization / PREL / centering (new options this session)
 
 comp = lp.PressioCompressor.from_config({
     "compressor_id": "fzgpumodules",
-    "early_config": {"fzgpumodules:fusion": "auto"}})
-check("fusion=auto readback", comp.get_options()["fzgpumodules:fusion"] == "auto")
+    "early_config": {"fzgpumodules:specialization": "auto"}})
+check("specialization=auto readback", comp.get_options()["fzgpumodules:specialization"] == "auto")
+
+partial = data.ravel()[:131].copy()
+for policy in ("off", "auto"):
+    ok, max_err, _ = roundtrip_ok({"early_config": {
+        "fzgpumodules:stages": ["quantizer:float:uint32", "adaptive_bitpack:int32"],
+        "fzgpumodules:connections": ["s1 <- s0:codes"],
+        "fzgpumodules:s0:linear_mode": True,
+        "fzgpumodules:s1:block_size": 32,
+        "fzgpumodules:memory_strategy": "preallocate",
+        "fzgpumodules:specialization": policy,
+    }}, partial)
+    check(f"partial fixed-block {policy} round-trip", ok, f"max_err={max_err}")
+
+# Confirm actual installation, including the lazily built inverse and option rebuild.
+for policy in ("off", "auto"):
+    comp = lp.PressioCompressor.from_config({
+        "compressor_id": "fzgpumodules",
+        "early_config": {
+            "fzgpumodules:stages": ["quantizer:float:uint32", "lorenzo:int32", "adaptive_bitpack:int32"],
+            "fzgpumodules:connections": ["s1 <- s0:codes", "s2 <- s1"],
+            "fzgpumodules:s0:linear_mode": True,
+            "fzgpumodules:s1:block_size": 32,
+            "fzgpumodules:s2:block_size": 32,
+            "fzgpumodules:memory_strategy": "preallocate",
+            "fzgpumodules:specialization": policy,
+        },
+        "compressor_config": {"pressio:abs": 1e-3},
+    })
+    check(f"integer Lorenzo block_size {policy} readback",
+          comp.get_options()["fzgpumodules:s1:block_size"] == 32)
+    encoded = comp.encode(partial)
+    metrics = comp.get_metrics()
+    check(f"{policy} forward specialization installed",
+          metrics["fzgpumodules:specialization_forward_groups"] == (1 if policy == "auto" else 0))
+    check(f"{policy} inverse not built before decode",
+          metrics["fzgpumodules:specialization_inverse_groups"] == 0)
+    restored = np.asarray(comp.decode(encoded, np.empty_like(partial)))
+    metrics = comp.get_metrics()
+    check(f"{policy} inverse specialization installed",
+          metrics["fzgpumodules:specialization_inverse_groups"] == (1 if policy == "auto" else 0))
+    check(f"{policy} specialized partial accuracy",
+          restored.shape == partial.shape and np.abs(restored - partial).max() <= 1e-3 + 1e-6)
+    if policy == "auto":
+        check("Auto implementation names reported",
+              metrics["fzgpumodules:specialization_forward_implementations"] == ["warp-register"] and
+              metrics["fzgpumodules:specialization_inverse_implementations"] == ["warp-register-inverse"])
+        comp.set_options({"fzgpumodules:s1:block_size": 0})
+        restored = np.asarray(comp.decode(comp.encode(partial), np.empty_like(partial)))
+        metrics = comp.get_metrics()
+        check("Lorenzo block_size change rebuilds and falls back",
+              metrics["fzgpumodules:rebuilt"] and
+              metrics["fzgpumodules:specialization_forward_groups"] == 0 and
+              metrics["fzgpumodules:specialization_inverse_groups"] == 0 and
+              np.abs(restored - partial).max() <= 1e-3 + 1e-6)
 
 try:
     lp.PressioCompressor.from_config({
         "compressor_id": "fzgpumodules",
-        "early_config": {"fzgpumodules:fusion": "bogus"}})
-    check("invalid fusion value rejected", False)
+        "early_config": {"fzgpumodules:specialization": "bogus"}})
+    check("invalid specialization value rejected", False)
 except Exception:
-    check("invalid fusion value rejected", True)
+    check("invalid specialization value rejected", True)
+
+comp = lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})
+check("specialization replaces fusion in option discovery",
+      "fzgpumodules:specialization" in comp.get_options() and "fzgpumodules:fusion" not in comp.get_options())
+for key, value in [("fzgpumodules:fusion", "auto"), ("fzgpumodules:specialization", 1)]:
+    try:
+        comp.set_options({key: value})
+        check(f"removed key or wrong type rejected: {key}", False)
+    except Exception:
+        check(f"removed key or wrong type rejected: {key}", True)
 
 # PREL's pressio:abs is a *fraction*: abs_eb = pressio:abs * max(|data|).
 # roundtrip_ok() checks max_err against the eb it's given, so pass it the

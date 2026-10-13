@@ -8,13 +8,14 @@ struct LorenzoParams {
     // int64_t/double (not int/float): pressio_options::get() requires an exact
     // type match and libpressio's Python layer always boxes int->int64_t,
     // float->double, so narrower fields here would silently never be set.
+    int64_t block_size       = 0;  // Integer Lorenzo: 0 = N-D; >0 = block-reset mode.
     int64_t quant_radius     = 32768;
     double  outlier_capacity = 0.2;
     bool    zigzag_codes     = false;
     double  value_base       = 0.0;  // 0 = auto-scan; >0 = skip scan (NOA: value_range, PREL: max|data|)
     bool    centering        = false; // per-tile mean centering (FSZ); 1-D only
     bool operator==(const LorenzoParams& o) const {
-        return quant_radius == o.quant_radius &&
+        return block_size == o.block_size && quant_radius == o.quant_radius &&
                outlier_capacity == o.outlier_capacity &&
                zigzag_codes == o.zigzag_codes &&
                value_base == o.value_base &&
@@ -33,11 +34,11 @@ public:
         auto parts = split_str(token, ':');
         const std::string& in_t = (parts.size() > 1) ? parts[1] : "float";
 
-        // Integer (lossless) Lorenzo: no configurable params
-        if(in_t == "int8")  return ctx.pipeline.addStage<fz::LorenzoStage<int8_t>>();
-        if(in_t == "int16") return ctx.pipeline.addStage<fz::LorenzoStage<int16_t>>();
-        if(in_t == "int32") return ctx.pipeline.addStage<fz::LorenzoStage<int32_t>>();
-        if(in_t == "int64") return ctx.pipeline.addStage<fz::LorenzoStage<int64_t>>();
+        // Integer (lossless) Lorenzo, optionally with block-local resets.
+        if(in_t == "int8")  return make_integer<int8_t>(sid, ctx);
+        if(in_t == "int16") return make_integer<int16_t>(sid, ctx);
+        if(in_t == "int32") return make_integer<int32_t>(sid, ctx);
+        if(in_t == "int64") return make_integer<int64_t>(sid, ctx);
 
         // Quantizing Lorenzo: error-bound-driven
         std::string cod_t = (parts.size() > 2 && !parts[2].empty()) ? parts[2] : "uint16";
@@ -51,7 +52,10 @@ public:
     void populate_options(pressio_options&   opts,
                            const std::string& sid,
                            const std::string& token) const override {
-        if(is_int(token)) return;
+        if(is_int(token)) {
+            opts.set("fzgpumodules:" + sid + ":block_size", get_params(sid).block_size);
+            return;
+        }
         const auto& p = get_params(sid);
         opts.set("fzgpumodules:" + sid + ":quant_radius",     p.quant_radius);
         opts.set("fzgpumodules:" + sid + ":outlier_capacity", p.outlier_capacity);
@@ -63,7 +67,12 @@ public:
     bool read_options(const pressio_options& opts,
                        const std::string&     sid,
                        const std::string&     token) override {
-        if(is_int(token)) return false;
+        if(is_int(token)) {
+            auto& p = params_[sid];
+            auto old = p.block_size;
+            opts.get("fzgpumodules:" + sid + ":block_size", &p.block_size);
+            return old != p.block_size;
+        }
         if(params_.count(sid) == 0) params_[sid] = LorenzoParams{};
         auto  old = params_[sid];
         auto& p   = params_[sid];
@@ -82,7 +91,11 @@ public:
     void populate_documentation(pressio_options&   opts,
                                  const std::string& sid,
                                  const std::string& token) const override {
-        if(is_int(token)) return;
+        if(is_int(token)) {
+            opts.set("fzgpumodules:" + sid + ":block_size",
+                std::string("Integer Lorenzo reset length: 0 selects N-D; 1..1024 selects block-local 1-D"));
+            return;
+        }
         opts.set("fzgpumodules:" + sid + ":quant_radius",
             std::string("Quantization radius (bin count / 2)"));
         opts.set("fzgpumodules:" + sid + ":outlier_capacity",
@@ -112,6 +125,16 @@ private:
     const LorenzoParams& get_params(const std::string& sid) const {
         auto it = params_.find(sid);
         return it != params_.end() ? it->second : defaults_;
+    }
+
+    template<typename T>
+    fz::Stage* make_integer(const std::string& sid, const StageContext& ctx) {
+        const auto block_size = get_params(sid).block_size;
+        if (block_size < 0 || block_size > 1024)
+            throw std::runtime_error("Integer Lorenzo block_size must be in [0, 1024]");
+        auto* stage = ctx.pipeline.addStage<fz::LorenzoStage<T>>();
+        stage->setBlockSize(static_cast<uint32_t>(block_size));
+        return stage;
     }
 
     template<typename TIn, typename TCode>
