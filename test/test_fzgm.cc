@@ -24,8 +24,8 @@
 //   HuffmanBklenModerateOverflowRejectsCleanly, AdmOverflowRejectsCleanly
 // Validation:
 //   InvalidErrorBoundMode, InvalidMemoryStrategy
-// Fusion:
-//   FusionOff, FusionAuto, InvalidFusion
+// Specialization:
+//   SpecializationOff, SpecializationAuto, InvalidSpecialization
 // Error bound modes (new):
 //   ErrorBoundMode_Prel, LorenzoQuantRelAliasMatchesPrel
 // Per-stage options (new):
@@ -613,9 +613,14 @@ TEST_F(FzgpuModulesTest, NewStageTokensCompileCheck) {
         {{"adaptive_bitpack:int32"},  {}},
         {{"rre"},  {}}, {{"rare"}, {}}, {{"raze"}, {}}, {{"clog"}, {}}, {{"hclog"}, {}},
         {{"gpulz"}, {}}, {{"tupl"}, {}}, {{"bitplane_rze"}, {}}, {{"ans"}, {}},
+#if LIBPRESSIO_FZGM_HAS_ADM
         {{"adm:uint16"}, {}}, {{"adm:uint32"}, {}},
+#endif
         {{"huffman:uint8"}, {}}, {{"huffman:uint16"}, {}}, {{"huffman:uint32"}, {}},
-        {{"szx:float"}, {}}, {{"szx:double"}, {}}, {{"szp:float"}, {}}, {{"szp:double"}, {}},
+        {{"szx:float"}, {}}, {{"szx:double"}, {}},
+#if LIBPRESSIO_FZGM_HAS_SZP
+        {{"szp:float"}, {}}, {{"szp:double"}, {}},
+#endif
         {{"adaptive_lorenzo:int16"}, {}}, {{"adaptive_lorenzo:int32"}, {}},
         {{"log_transform"}, {}},
         {{"ginterp"}, {}},
@@ -903,40 +908,59 @@ TEST_F(FzgpuModulesTest, InvalidMemoryStrategy) {
     EXPECT_NE(comp->set_options(opts), 0);
 }
 
-// ── Fusion ────────────────────────────────────────────────────────────────────
+// ── Specialization ────────────────────────────────────────────────────────────────────
 
-TEST_F(FzgpuModulesTest, FusionOff) {
+TEST_F(FzgpuModulesTest, SpecializationOff) {
     const double eb = 1e-3;
     pressio_options opts;
     opts.set("pressio:abs", eb);
     opts.set("fzgpumodules:stages",      std::vector<std::string>{"lorenzo:float:uint16", "rze"});
     opts.set("fzgpumodules:connections", std::vector<std::string>{"s1 <- s0:codes"});
-    opts.set("fzgpumodules:fusion",      std::string("off"));
+    opts.set("fzgpumodules:specialization",      std::string("off"));
 
     auto [max_err, cr] = roundtrip(lib, opts, input);
     EXPECT_GT(cr, 1.0);
     EXPECT_LE(max_err, eb + 1e-5);
 }
 
-TEST_F(FzgpuModulesTest, FusionAuto) {
+TEST_F(FzgpuModulesTest, SpecializationAuto) {
     const double eb = 1e-3;
     pressio_options opts;
     opts.set("pressio:abs", eb);
     opts.set("fzgpumodules:stages",      std::vector<std::string>{"lorenzo:float:uint16", "rze"});
     opts.set("fzgpumodules:connections", std::vector<std::string>{"s1 <- s0:codes"});
-    opts.set("fzgpumodules:fusion",      std::string("auto"));
+    opts.set("fzgpumodules:specialization",      std::string("auto"));
 
     auto [max_err, cr] = roundtrip(lib, opts, input);
     EXPECT_GT(cr, 1.0);
     EXPECT_LE(max_err, eb + 1e-5);
 }
 
-TEST_F(FzgpuModulesTest, InvalidFusion) {
+TEST_F(FzgpuModulesTest, InvalidSpecialization) {
     pressio_compressor comp = lib.get_compressor("fzgpumodules");
     ASSERT_TRUE(!!comp);
     pressio_options opts;
-    opts.set("fzgpumodules:fusion", std::string("bogus"));
+    opts.set("fzgpumodules:specialization", std::string("bogus"));
     EXPECT_NE(comp->set_options(opts), 0);
+}
+
+TEST_F(FzgpuModulesTest, SpecializationRenameRejectsOldKeyAndWrongType) {
+    auto comp = lib.get_compressor("fzgpumodules");
+    ASSERT_TRUE(!!comp);
+    pressio_options opts;
+    opts.set("fzgpumodules:specialization", std::string("auto"));
+    ASSERT_EQ(comp->set_options(opts), 0);
+    pressio_options old_key;
+    old_key.set("fzgpumodules:fusion", std::string("off"));
+    EXPECT_NE(comp->set_options(old_key), 0);
+    pressio_options wrong_type;
+    wrong_type.set("fzgpumodules:specialization", int64_t(1));
+    EXPECT_NE(comp->set_options(wrong_type), 0);
+    auto current = comp->get_options();
+    std::string policy;
+    EXPECT_EQ(current.get("fzgpumodules:specialization", &policy), pressio_options_key_set);
+    EXPECT_EQ(policy, "auto");
+    EXPECT_EQ(current.key_status("fzgpumodules:fusion"), pressio_options_key_does_not_exist);
 }
 
 // ── Error bound modes (new) ─────────────────────────────────────────────────────
@@ -1236,6 +1260,9 @@ TEST_F(FzgpuModulesTest, HuffmanBklenModerateOverflowRejectsCleanly) {
 }
 
 TEST_F(FzgpuModulesTest, AdmUint16BoundedInput) {
+#if !LIBPRESSIO_FZGM_HAS_ADM
+    GTEST_SKIP() << "Stage is absent from the installed FZGPUModules public API";
+#endif
     pressio_data data = pressio_data::owning(pressio_uint16_dtype, {256, 256});
     auto* p = static_cast<uint16_t*>(data.data());
     for (size_t i = 0; i < data.num_elements(); ++i)
@@ -1262,6 +1289,9 @@ TEST_F(FzgpuModulesTest, AdmUint16BoundedInput) {
 }
 
 TEST_F(FzgpuModulesTest, AdmUint32BoundedInput) {
+#if !LIBPRESSIO_FZGM_HAS_ADM
+    GTEST_SKIP() << "Stage is absent from the installed FZGPUModules public API";
+#endif
     pressio_data data = pressio_data::owning(pressio_int32_dtype, {256, 256});
     auto* p = static_cast<int32_t*>(data.data());
     for (size_t i = 0; i < data.num_elements(); ++i)
@@ -1291,6 +1321,9 @@ TEST_F(FzgpuModulesTest, AdmUint32BoundedInput) {
 // (#ifndef NDEBUG), so out-of-spec input (diffs exceeding algorithm capacity)
 // silently corrupted device memory instead of raising. Confirms it now raises.
 TEST_F(FzgpuModulesTest, AdmOverflowRejectsCleanly) {
+#if !LIBPRESSIO_FZGM_HAS_ADM
+    GTEST_SKIP() << "Stage is absent from the installed FZGPUModules public API";
+#endif
     pressio_data data = pressio_data::owning(pressio_uint16_dtype, {256, 256});
     auto* p = static_cast<uint16_t*>(data.data());
     // Alternating extremes: adjacent-element diffs from the block center are
@@ -1322,6 +1355,9 @@ TEST_F(FzgpuModulesTest, SZxStandaloneAbs) {
 }
 
 TEST_F(FzgpuModulesTest, SZpStandaloneAbs) {
+#if !LIBPRESSIO_FZGM_HAS_SZP
+    GTEST_SKIP() << "Stage is absent from the installed FZGPUModules public API";
+#endif
     const double eb = 1e-3;
     pressio_options opts;
     opts.set("pressio:abs", eb);
@@ -1424,4 +1460,56 @@ TEST_F(FzgpuModulesTest, ROIBinSplitPipeline) {
     for (size_t i = 0; i < data.num_elements() && exact; ++i)
         if (orig[i] != recon[i]) exact = false;
     EXPECT_TRUE(exact) << "roibin_split:float round-trip is not exact";
+}
+
+// Exercise a partial fixed-code block through both execution policies.
+TEST_F(FzgpuModulesTest, PartialFixedBlockOffAndAuto) {
+    auto data = make_1d(131);
+    for (const std::string policy : {"off", "auto"}) {
+        SCOPED_TRACE(policy);
+        pressio_options opts;
+        opts.set("pressio:abs", 1e-3);
+        opts.set("fzgpumodules:stages", std::vector<std::string>{"quantizer:float:uint32", "adaptive_bitpack:int32"});
+        opts.set("fzgpumodules:connections", std::vector<std::string>{"s1 <- s0:codes"});
+        opts.set("fzgpumodules:s0:linear_mode", true);
+        opts.set("fzgpumodules:s1:block_size", int64_t(32));
+        opts.set("fzgpumodules:specialization", policy);
+        opts.set("fzgpumodules:memory_strategy", std::string("preallocate"));
+        auto [max_error, ratio] = roundtrip(lib, opts, data);
+        EXPECT_LE(max_error, 1e-3 + 1e-6);
+        EXPECT_GT(ratio, 0.0);
+    }
+}
+
+TEST_F(FzgpuModulesTest, FreshDecoderRequiresPriorCompression) {
+    auto encoder = lib.get_compressor("fzgpumodules");
+    auto decoder = lib.get_compressor("fzgpumodules");
+    ASSERT_TRUE(!!encoder);
+    ASSERT_TRUE(!!decoder);
+    pressio_data compressed = pressio_data::empty(pressio_byte_dtype, {});
+    ASSERT_EQ(encoder->compress(&input, &compressed), 0) << encoder->error_msg();
+    auto output = pressio_data::owning(input.dtype(), input.dimensions());
+    EXPECT_NE(decoder->decompress(&compressed, &output), 0);
+    EXPECT_NE(std::string(decoder->error_msg()).find("prior compress"), std::string::npos);
+}
+
+TEST_F(FzgpuModulesTest, UnavailableLegacyStagesRejectCleanly) {
+    std::vector<std::string> tokens;
+#if !LIBPRESSIO_FZGM_HAS_ADM
+    tokens.push_back("adm:uint16");
+#endif
+#if !LIBPRESSIO_FZGM_HAS_SZP
+    tokens.push_back("szp:float");
+#endif
+    for (const auto& token : tokens) {
+        SCOPED_TRACE(token);
+        auto compressor = lib.get_compressor("fzgpumodules");
+        ASSERT_TRUE(!!compressor);
+        pressio_options opts;
+        opts.set("fzgpumodules:stages", std::vector<std::string>{token});
+        opts.set("fzgpumodules:connections", std::vector<std::string>{});
+        ASSERT_EQ(compressor->set_options(opts), 0);
+        pressio_data compressed = pressio_data::empty(pressio_byte_dtype, {});
+        EXPECT_NE(compressor->compress(&input, &compressed), 0);
+    }
 }
