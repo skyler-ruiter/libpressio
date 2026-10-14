@@ -15,53 +15,8 @@
 #include "libpressio_ext/cpp/pressio.h"
 #include "libpressio_ext/cpp/domain_manager.h"
 
-// Stage handlers — adding a new stage: create stage_<name>.h, include it here,
-// push a make_unique<XStageKind>() in make_stage_kinds() below.
-#include "stage_kind.h"
+#include "stage_registry.h"
 #include "archive.h"
-#include "stage_lorenzo.h"
-#include "stage_quantizer.h"
-#include "stage_diff.h"
-#include "stage_rle.h"
-#include "stage_zigzag.h"
-#include "stage_negabinary.h"
-#include "stage_bitshuffle.h"
-#include "stage_bitpack.h"
-#include "stage_rze.h"
-#include "stage_tiled_lorenzo.h"
-#include "stage_adaptive_bitpack.h"
-#include "stage_rre.h"
-#include "stage_rare.h"
-#include "stage_raze.h"
-#include "stage_clog.h"
-#include "stage_hclog.h"
-#include "stage_gpulz.h"
-#include "stage_tupl.h"
-#include "stage_ans.h"
-#if LIBPRESSIO_FZGM_HAS_ADM
-#include "stage_adm.h"
-#endif
-#include "stage_bitplane_rze.h"
-#if LIBPRESSIO_FZGM_HAS_SZX
-#include "stage_szx.h"
-#endif
-#if LIBPRESSIO_FZGM_HAS_SZP
-#include "stage_szp.h"
-#endif
-#include "stage_huffman.h"
-#include "stage_adaptive_lorenzo.h"
-#include "stage_log_transform.h"
-#include "stage_ginterp.h"
-#include "stage_roibin_split.h"
-#if LIBPRESSIO_FZGM_HAS_CDF97
-#include "stage_cdf97.h"
-#endif
-#if LIBPRESSIO_FZGM_HAS_SPECK2D
-#include "stage_speck2d.h"
-#endif
-#if LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
-#include "stage_outlier_correct.h"
-#endif
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
@@ -153,7 +108,7 @@ struct PipelineState {
 };
 
 // =============================================================================
-// Pipeline construction helpers (shared by both plugin classes)
+// Pipeline construction helpers
 // =============================================================================
 
 // Apply common per-pipeline settings after construction.
@@ -199,59 +154,7 @@ static pressio_dtype fz_to_pressio_dtype(fz::DataType dt) {
 class fzgpumodules_plugin : public libpressio_compressor_plugin {
 public:
 
-    fzgpumodules_plugin() : stage_kinds_(make_stage_kinds()) {}
-
-    // =========================================================================
-    // Stage registry factory
-    // =========================================================================
-
-    static std::vector<std::unique_ptr<StageKind>> make_stage_kinds() {
-        std::vector<std::unique_ptr<StageKind>> v;
-        v.push_back(std::make_unique<LorenzoStageKind>());
-        v.push_back(std::make_unique<QuantizerStageKind>());
-        v.push_back(std::make_unique<DiffStageKind>());
-        v.push_back(std::make_unique<RLEStageKind>());
-        v.push_back(std::make_unique<ZigzagStageKind>());
-        v.push_back(std::make_unique<NegabinaryStageKind>());
-        v.push_back(std::make_unique<BitshuffleStageKind>());
-        v.push_back(std::make_unique<BitpackStageKind>());
-        v.push_back(std::make_unique<RZEStageKind>());
-        v.push_back(std::make_unique<TiledLorenzoStageKind>());
-        v.push_back(std::make_unique<AdaptiveBitpackStageKind>());
-        v.push_back(std::make_unique<RREStageKind>());
-        v.push_back(std::make_unique<RAREStageKind>());
-        v.push_back(std::make_unique<RAZEStageKind>());
-        v.push_back(std::make_unique<CLOGStageKind>());
-        v.push_back(std::make_unique<HCLOGStageKind>());
-        v.push_back(std::make_unique<GPULZStageKind>());
-        v.push_back(std::make_unique<TUPLStageKind>());
-        v.push_back(std::make_unique<ANSStageKind>());
-#if LIBPRESSIO_FZGM_HAS_ADM
-        v.push_back(std::make_unique<ADMStageKind>());
-#endif
-        v.push_back(std::make_unique<BitplaneRZEStageKind>());
-#if LIBPRESSIO_FZGM_HAS_SZX
-        v.push_back(std::make_unique<SZxStageKind>());
-#endif
-#if LIBPRESSIO_FZGM_HAS_SZP
-        v.push_back(std::make_unique<SZpStageKind>());
-#endif
-        v.push_back(std::make_unique<HuffmanStageKind>());
-        v.push_back(std::make_unique<AdaptiveLorenzoStageKind>());
-        v.push_back(std::make_unique<LogTransformStageKind>());
-        v.push_back(std::make_unique<GInterpStageKind>());
-        v.push_back(std::make_unique<ROIBinSplitStageKind>());
-#if LIBPRESSIO_FZGM_HAS_CDF97
-        v.push_back(std::make_unique<Cdf97StageKind>());
-#endif
-#if LIBPRESSIO_FZGM_HAS_SPECK2D
-        v.push_back(std::make_unique<Speck2DStageKind>());
-#endif
-#if LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
-        v.push_back(std::make_unique<Cdf97OutlierCorrectStageKind>());
-#endif
-        return v;
-    }
+    fzgpumodules_plugin() = default;
 
     // =========================================================================
     // Options interface
@@ -276,7 +179,7 @@ public:
         set(options, "fzgpumodules:expose_stage_outputs", expose_stage_outputs_);
 
         if (config_file_.empty()) {
-            for_each_stage([&](StageKind& sk, const std::string& sid, const std::string& tok) {
+            for_each_stage([&](const StageKind& sk, const std::string& sid, const std::string& tok) {
                 sk.populate_options(options, sid, tok);
             });
         }
@@ -452,7 +355,7 @@ public:
             "timing loop should discard measurements where this is true, or warm up first.");
 
         if (config_file_.empty()) {
-            for_each_stage([&](StageKind& sk, const std::string& sid, const std::string& tok) {
+            for_each_stage([&](const StageKind& sk, const std::string& sid, const std::string& tok) {
                 sk.populate_documentation(options, sid, tok);
                 if(!sk.outlier_indices_key(tok).empty())
                     set(options, "fzgpumodules:" + sid + ":outlier_count",
@@ -470,8 +373,7 @@ public:
             dims_, num_streams_, graph_mode_, specialization_, config_file_, expose_stage_outputs_);
         auto saved = std::apply([](const auto&... value) { return std::make_tuple(value...); }, fields);
         auto saved_fields = std::apply([](auto&... value) { return std::tie(value...); }, saved);
-        std::vector<std::unique_ptr<StageKind>> saved_kinds;
-        for(const auto& kind : stage_kinds_) saved_kinds.push_back(kind->clone());
+        auto saved_kinds = stage_kinds_;
         const bool saved_dirty = state_.dirty;
         auto rollback = [&]() noexcept {
             fields.swap(saved_fields);
@@ -632,19 +534,10 @@ public:
 
     int compress_impl(const pressio_data* input, struct pressio_data* output) override {
         try {
-            switch(input->dtype()) {
-                case pressio_float_dtype:   return compress_device<float>(input, output);
-                case pressio_double_dtype:  return compress_device<double>(input, output);
-                case pressio_int8_dtype:    return compress_device<int8_t>(input, output);
-                case pressio_int16_dtype:   return compress_device<int16_t>(input, output);
-                case pressio_int32_dtype:   return compress_device<int32_t>(input, output);
-                case pressio_int64_dtype:   return compress_device<int64_t>(input, output);
-                case pressio_uint8_dtype:   return compress_device<uint8_t>(input, output);
-                case pressio_uint16_dtype:  return compress_device<uint16_t>(input, output);
-                case pressio_uint32_dtype:  return compress_device<uint32_t>(input, output);
-                case pressio_uint64_dtype:  return compress_device<uint64_t>(input, output);
-                default: return set_error(1, "Unsupported data type for FZGpuModules compression");
-            }
+            const auto& types = archive_dtypes();
+            if(std::find(types.begin(), types.end(), input->dtype()) == types.end())
+                return set_error(1, "Unsupported data type for FZGpuModules compression");
+            return compress_device(input, output);
         } catch(std::exception const& ex) {
             return set_error(2, std::string("Compression exception: ") + ex.what());
         }
@@ -711,6 +604,10 @@ private:
     // =========================================================================
 
     void build_pipeline(size_t data_size) {
+        std::vector<ParsedConnection> connections;
+        connections.reserve(connections_.size());
+        for(const auto& text : connections_) connections.push_back(parse_connection(text));
+
         if (graph_mode_) {
             for (auto& tok : stages_)
                 if (token_kind(tok) == "rze")
@@ -736,24 +633,16 @@ private:
         std::map<std::string, fz::Stage*> ptrs;
         for(size_t i = 0; i < stages_.size(); i++) {
             std::string sid = "s" + std::to_string(i);
-            auto kv = token_kind(stages_[i]);
-            fz::Stage* stage = nullptr;
-            for(auto& sk : stage_kinds_) {
-                if(sk->matches(kv)) {
-                    stage = sk->add_stage(stages_[i], sid, ctx);
-                    std::string okey = sk->outlier_indices_key(stages_[i]);
-                    if(!okey.empty())
-                        state_.outlier_stages.push_back({sid, {stage, okey}});
-                    break;
-                }
-            }
-            if(!stage)
-                throw std::runtime_error("Unknown stage type: " + stages_[i]);
+            auto* kind = stage_kinds_.find(stages_[i]);
+            if(!kind) throw std::runtime_error("Unknown stage type: " + stages_[i]);
+            auto* stage = kind->add_stage(stages_[i], sid, ctx);
+            const auto indices_key = kind->outlier_indices_key(stages_[i]);
+            if(!indices_key.empty())
+                state_.outlier_stages.push_back({sid, {stage, indices_key}});
             ptrs[sid] = stage;
         }
 
-        for(auto& conn_str : connections_) {
-            auto c = parse_connection(conn_str);
+        for(const auto& c : connections) {
             if(c.from == "__external__") {
                 // Bind the pipeline's raw input directly to this port, even
                 // though 'to' may also have other real connections (e.g.
@@ -779,8 +668,7 @@ private:
         state_.terminal_outputs.clear();
         if (expose_stage_outputs_) {
             auto is_consumed = [&](const std::string& sid, const std::string& port, size_t idx) {
-                for (auto& conn_str : connections_) {
-                    auto c = parse_connection(conn_str);
+                for(const auto& c : connections) {
                     if (c.from != sid) continue;
                     if (c.port == port)              return true;  // explicit match
                     if (c.port.empty() && idx == 0)  return true;  // default = first port
@@ -827,14 +715,13 @@ private:
     }
 
     // =========================================================================
-    // Typed compress / decompress
+    // Archive compression / decompression
     // =========================================================================
 
-    template<typename T>
     int compress_device(const pressio_data* real_input, struct pressio_data* output) {
         pressio_data gpu_input = domain_manager().make_readable(
             domain_plugins().build("cudamalloc"), *real_input);
-        const T* d_input   = static_cast<const T*>(gpu_input.data());
+        const void* d_input = gpu_input.data();
         size_t   data_size = gpu_input.size_in_bytes();
 
         // Config-file pipelines are sized by the TOML's input_size; don't rebuild
@@ -964,9 +851,7 @@ private:
     void for_each_stage(F&& f) const {
         for(size_t i = 0; i < stages_.size(); i++) {
             std::string sid = "s" + std::to_string(i);
-            auto kv = token_kind(stages_[i]);
-            for(const auto& sk : stage_kinds_)
-                if(sk->matches(kv)) { f(*sk, sid, stages_[i]); break; }
+            if(const auto* kind = stage_kinds_.find(stages_[i])) f(*kind, sid, stages_[i]);
         }
     }
 
@@ -974,9 +859,7 @@ private:
     void for_each_stage(F&& f) {
         for(size_t i = 0; i < stages_.size(); i++) {
             std::string sid = "s" + std::to_string(i);
-            auto kv = token_kind(stages_[i]);
-            for(auto& sk : stage_kinds_)
-                if(sk->matches(kv)) { f(*sk, sid, stages_[i]); break; }
+            if(auto* kind = stage_kinds_.find(stages_[i])) f(*kind, sid, stages_[i]);
         }
     }
 
@@ -1039,7 +922,7 @@ private:
     CudaStream    stream_;
     PipelineState state_;
 
-    std::vector<std::unique_ptr<StageKind>> stage_kinds_;
+    StageRegistry stage_kinds_;
 
     double      error_bound_abs_   = 1e-3;
     double      error_bound_rel_   = 1e-3;

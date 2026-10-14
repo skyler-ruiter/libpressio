@@ -91,3 +91,17 @@ float32, float64, int8, int16, int32, int64, uint8, uint16, uint32, uint64.
 The dimensions must describe exactly the uncompressed byte count in the FZM
 header. The FZM header checksum validates its metadata; FZLP v1 does not add a
 payload checksum. Array dimensions and dtype are validated against byte counts.
+
+## Adapter layout
+
+- `fzgpumodules.cc`: libpressio options, pipeline lifecycle, execution, and metrics.
+- `stage_registry.h`: SDK-gated handler catalog, token lookup, and parameter snapshots.
+- `stages/stage_kind.h`: common handler contract and value-copy support.
+- `stages/stage_*.h`: stage-specific options, documentation, and construction.
+- `archive.h`: the self-contained array envelope format.
+
+To add a stage family, implement a handler in `stages/`, include it and register
+it in `stage_registry.h`, and add FZGM integration tests. Use the existing SDK
+capability guards for optional families. Registration order retains the previous
+first-match behavior; individual handlers own their token aliases. The main
+plugin requires no stage-specific edits.

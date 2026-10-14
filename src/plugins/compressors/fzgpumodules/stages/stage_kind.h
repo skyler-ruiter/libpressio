@@ -46,11 +46,7 @@ struct StageContext {
 // =============================================================================
 // StageKind — abstract base for each stage family
 //
-// Adding a new stage family:
-//   1. Create stage_<name>.h with a concrete StageKind subclass.
-//   2. #include it in fzgpumodules.cc.
-//   3. Push a new instance in fzgpumodules_plugin::make_stage_kinds().
-//   Nothing else needs to change.
+// Adding a family: implement a handler here and register it in ../stage_registry.h.
 // =============================================================================
 
 struct StageKind {
