@@ -34,6 +34,32 @@ For branching pipelines, use the plugin's stages/connections options directly.
 This replaces `from fzgm_helper import Chain` with
 `lp.FZGPUModulesChain()` on new installations.
 
+## Execution and ownership
+
+Use one GPU with the standard CUDA runtime primary context. Do not switch the
+current device, use custom CUDA contexts, or reset the device while FZGM objects
+are alive. `pressio:thread_safe=serialized` requires external serialization of
+calls across **all** FZGM instances, including clones; the plugin adds no lock.
+
+A clone copies options and stage parameters, then builds its own encoder and CUDA
+stream on first execution. It does not share a live pipeline, buffers, or execution
+metrics. Stream creation failures are reported through libpressio's error API.
+
+NumPy input is uploaded for compression, and the resulting archive is returned to
+host memory for ordinary Python save/load. GPU input keeps the archive on the GPU;
+a GPU output request also keeps it there. Decoding returns host output by default
+or GPU output when requested. Libpressio's domain manager owns these transfers;
+the adapter copies core pool-owned buffers into independently owned output buffers.
+CUDA Graph mode accelerates encoding only: its archives remain independently
+decodable, and archive decoding builds a fresh pipeline without graph capture.
+
+`fzgpumodules:execution_time_us` measures wall time around the core compression
+call, excluding pipeline construction, input upload, archive assembly, and host
+output transfer. It is not a CUDA-event kernel time or end-to-end Python latency.
+`fzgpumodules:peak_memory` reports the core pipeline pool's peak usage, excluding
+external input/archive allocations and host memory. Host `rusage` metrics measure
+a different quantity and cannot replace this pool measurement.
+
 ## Configuration updates
 
 FZGM option updates are transactional: an error restores all top-level values,

@@ -132,9 +132,6 @@ public:
           return set_error(ec, roi->error_msg());
         }
       }
-      // A GPU inner compressor (e.g. cuSZp) may return device memory; the memcpy
-      // below needs host memory, as the background path already ensures.
-      roi_compressed = domain_manager().make_readable(domain_plugins().build("malloc"), std::move(roi_compressed));
       view_segment(&roi_compressed, "roi_compressed");
 
       int ec = background->compress(&input, &background_compressed);
@@ -187,14 +184,12 @@ public:
       } else if (ec > 0) {
         return set_error(ec, roi->error_msg());
       }
-      roi_decompressed = domain_manager().make_readable(domain_plugins().build("malloc"), std::move(roi_decompressed));
       ec = background->decompress(&backround_compressed, output);
       if(ec < 0) {
         set_error(ec, background->error_msg());
       } else if (ec > 0) {
         return set_error(ec, background->error_msg());
       }
-      *output = domain_manager().make_readable(domain_plugins().build("malloc"), std::move(*output));
 
       try {
         restore_roi(*output, roi_decompressed);
@@ -208,7 +203,6 @@ public:
       } else if (ec > 0) {
         return set_error(ec, background->error_msg());
       }
-      *output = domain_manager().make_readable(domain_plugins().build("malloc"), std::move(*output));
     }
 
 

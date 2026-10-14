@@ -67,16 +67,26 @@ static ParsedConnection parse_connection(const std::string& s) {
 
 struct CudaStream {
     cudaStream_t s = nullptr;
-    CudaStream()  { cudaStreamCreate(&s); }
+    CudaStream() = default;
     ~CudaStream() { if(s) cudaStreamDestroy(s); }
     CudaStream(CudaStream&& o) noexcept : s(std::exchange(o.s, nullptr)) {}
     CudaStream& operator=(CudaStream&& o) noexcept {
         if(this != &o) { if(s) cudaStreamDestroy(s); s = std::exchange(o.s, nullptr); }
         return *this;
     }
-    CudaStream(CudaStream const&)            { cudaStreamCreate(&s); }
-    CudaStream& operator=(CudaStream const&) { if(!s) cudaStreamCreate(&s); return *this; }
-    operator cudaStream_t() const { return s; }
+    CudaStream(CudaStream const&) = delete;
+    CudaStream& operator=(CudaStream const&) = delete;
+    operator cudaStream_t() {
+        if(!s) {
+            const auto error = cudaStreamCreate(&s);
+            if(error != cudaSuccess) {
+                s = nullptr;
+                throw std::runtime_error(std::string("CUDA stream creation failed: ") +
+                                         cudaGetErrorString(error));
+            }
+        }
+        return s;
+    }
 };
 
 struct OutlierStageRef {
@@ -99,12 +109,8 @@ struct PipelineState {
     PipelineState() = default;
     PipelineState(PipelineState&&) = default;
     PipelineState& operator=(PipelineState&&) = default;
-    PipelineState(PipelineState const&)            : ptr(nullptr), dirty(true), last_size(0) {}
-    PipelineState& operator=(PipelineState const&) {
-        ptr.reset(); dirty = true; last_size = 0;
-        outlier_stages.clear(); terminal_outputs.clear();
-        return *this;
-    }
+    PipelineState(PipelineState const&) = delete;
+    PipelineState& operator=(PipelineState const&) = delete;
 };
 
 // =============================================================================
@@ -189,6 +195,7 @@ public:
 
     struct pressio_options get_configuration_impl() const override {
         struct pressio_options options;
+        // Serialize calls across all FZGM instances, not just each individual object.
         set(options, "pressio:thread_safe",  pressio_thread_safety_serialized);
         set(options, "pressio:stability",    "experimental");
         set(options, "fzgpumodules:memory_strategy",  map_keys(MEMORY_STRATEGIES));
@@ -225,7 +232,11 @@ public:
             "FZGPUModules GPU compressor with user-composable pipeline stages.\n\n"
             "Configure the pipeline by setting `fzgpumodules:stages` (ordered list of stage tokens) "
             "and `fzgpumodules:connections` (list of wiring strings). "
-            "Set `fzgpumodules:dims` for multi-dimensional data (default: infer 1-D from input size).");
+            "Set `fzgpumodules:dims` for multi-dimensional data (default: infer 1-D from input size). "
+            "Use one GPU with the standard CUDA runtime primary context. Serialize calls across "
+            "all FZGM instances; do not switch devices or reset the context while objects are alive. "
+            "Host inputs produce host archives; GPU inputs preserve device residency. "
+            "A fresh decoder reconstructs its pipeline from the archive metadata.");
         set(options, "pressio:abs",
             "Absolute error bound. Also holds the bound fraction for fzgpumodules:error_bound_mode "
             "'noa' (value-range fraction) and 'prel' (fraction of max|data|).");
@@ -256,11 +267,9 @@ public:
             "Eliminates per-call CPU dispatch overhead after a one-time warmup+capture on "
             "the first compress() call. Requires memory_strategy=preallocate. "
             "Incompatible with rze stage. "
-            "In graph mode, compress() may be called any number of times without decompressing "
-            "first — each call replays the captured graph and overwrites the internal DAG "
-            "buffers. decompress() reads from those live GPU buffers (the most recent "
-            "compress() result); the compressed_input bytes are not parsed. "
-            "Cross-machine or cross-process decompression is not supported in graph mode.");
+            "Each encode copies its result into a self-contained archive. A fresh decoder can "
+            "read that archive in another process with a compatible SDK. Decode reconstructs "
+            "a pipeline from the archive and does not use CUDA Graph capture.");
         set(options, "fzgpumodules:specialization",
             "Pipeline Specialization policy: off (default) or auto. Auto installs admitted "
             "implementations for supported stage combinations and otherwise uses staged execution. "
@@ -336,18 +345,19 @@ public:
             "fzgpumodules:memory_multiplier may still be set via libpressio options. "
             "Per-stage outlier_count metrics are not available in config-file mode. "
             "Set to empty string to revert to the stages/connections API. "
-            "See docs/FZGPUModulesUsage.md for the TOML format.");
+            "See FZGPUModules docs/config_file.md for the TOML format.");
         set(options, "fzgpumodules:expose_stage_outputs",
             "When true, each unconnected stage output port is exposed as a pressio_data "
             "metric under 'fzgpumodules:sN:output:<port>' after compress(). "
             "For a single-stage pipeline this lets you inspect the raw data on both "
             "sides of the transformation. Not available in config_file mode.");
         set(options, "fzgpumodules:peak_memory",
-            "[Output] Peak GPU memory usage from last compression (bytes)");
+            "[Output] Peak core pipeline pool usage from last compression (bytes); excludes host and external input/archive allocations.");
         set(options, "fzgpumodules:execution_time_us",
-            "[Output] Execution time from last compression (microseconds). Stream-synchronized "
-            "device kernel time only — excludes host<->device staging and pipeline (re)build "
-            "cost; see fzgpumodules:rebuilt to check whether the latter applies to this call.");
+            "[Output] Wall time around the core compression call (microseconds), including "
+            "its host dispatch and synchronization. Excludes pipeline construction, input upload, "
+            "archive assembly, and host output transfer; not CUDA-event kernel timing or "
+            "end-to-end Python latency. See fzgpumodules:rebuilt for build status.");
         set(options, "fzgpumodules:rebuilt",
             "[Output] True if the last compress() call (re)built the pipeline (first call, "
             "dirty options, or — in manual-pipeline mode — a changed input size) rather than "
@@ -537,6 +547,7 @@ public:
             const auto& types = archive_dtypes();
             if(std::find(types.begin(), types.end(), input->dtype()) == types.end())
                 return set_error(1, "Unsupported data type for FZGpuModules compression");
+            static_cast<cudaStream_t>(stream_); // Allocate inside the libpressio error boundary.
             return compress_device(input, output);
         } catch(std::exception const& ex) {
             return set_error(2, std::string("Compression exception: ") + ex.what());
@@ -545,6 +556,7 @@ public:
 
     int decompress_impl(const pressio_data* input, struct pressio_data* output) override {
         try {
+            static_cast<cudaStream_t>(stream_);
             return decompress_archive(input, output);
         } catch(std::exception const& ex) {
             return set_error(2, std::string("Decompression exception: ") + ex.what());

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """FZGM configuration transactions must preserve values and live pipelines on rejection."""
 import sys
+import os
+import subprocess
 import unittest
 binding_dir = sys.argv.pop(1)
 sys.path.insert(0, binding_dir)
@@ -84,6 +86,30 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(self.comp.get_options()["pressio:abs"], 5e-4)
         self.comp.encode(self.x)
         self.assertTrue(self.comp.get_metrics()["fzgpumodules:rebuilt"])
+
+
+class RuntimeFailureTests(unittest.TestCase):
+    def test_no_gpu_reports_stream_error_without_breaking_configuration(self):
+        # Use a fresh process because CUDA caches device visibility after initialization.
+        code = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import libpressio as lp
+import numpy as np
+comp = lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})
+assert comp.get_options()["fzgpumodules:specialization"] == "off"
+for _ in range(2):
+    try:
+        comp.encode(np.ones(32, dtype=np.float32))
+    except lp.PressioException as error:
+        assert "CUDA stream creation failed" in str(error), str(error)
+    else:
+        raise AssertionError("Encoding succeeded without a visible GPU")
+"""
+        env = dict(os.environ, CUDA_VISIBLE_DEVICES="")
+        result = subprocess.run([sys.executable, "-c", code, binding_dir],
+                                env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__": unittest.main()

@@ -141,18 +141,7 @@ static RunResult run_pipeline(pressio&               lib,
     }
 
     if (verbose()) {
-        auto cur = comp->get_options();
-        std::vector<std::string> stages, conns;
-        std::string strat; float mult = 0;
-        cur.get("fzgpumodules:stages",           &stages);
-        cur.get("fzgpumodules:connections",       &conns);
-        cur.get("fzgpumodules:memory_strategy",   &strat);
-        cur.get("fzgpumodules:memory_multiplier", &mult);
-        std::cout << "  stages:   ";
-        for (auto& s : stages) std::cout << s << "  ";
-        std::cout << "\n  conns:    ";
-        for (auto& c : conns)  std::cout << c << "  ";
-        std::cout << "\n  memory:   " << strat << " x" << mult << "\n";
+        std::cout << "  options: " << comp->get_options() << '\n';
     }
 
     pressio_data compressed = pressio_data::empty(pressio_byte_dtype, {});
@@ -169,17 +158,7 @@ static RunResult run_pipeline(pressio&               lib,
 
     auto results = comp->get_metrics_results();
     if (verbose()) {
-        double cr = 0, max_err = 0, psnr = 0;
-        uint64_t comp_sz = 0, uncomp_sz = 0;
-        results.get("size:compression_ratio", &cr);
-        results.get("size:compressed_size",   &comp_sz);
-        results.get("size:uncompressed_size", &uncomp_sz);
-        results.get("error_stat:max_error",   &max_err);
-        results.get("error_stat:psnr",        &psnr);
-        std::cout << "  ratio:    " << cr
-                  << "  (" << uncomp_sz << " -> " << comp_sz << " bytes)\n"
-                  << "  max_err:  " << max_err << "\n"
-                  << "  psnr:     " << psnr << " dB\n";
+        std::cout << "  metrics: " << results << '\n';
     }
 
     RunResult r;
@@ -241,13 +220,7 @@ static std::pair<double, double> roundtrip(pressio&               lib,
     results.get("size:compression_ratio", &cr);
 
     if (verbose()) {
-        double psnr = 0; uint64_t comp_sz = 0, uncomp_sz = 0;
-        results.get("error_stat:psnr",        &psnr);
-        results.get("size:compressed_size",   &comp_sz);
-        results.get("size:uncompressed_size", &uncomp_sz);
-        std::cout << "  max_err=" << max_err << "  psnr=" << psnr
-                  << "  ratio=" << cr
-                  << "  (" << uncomp_sz << "->" << comp_sz << ")\n";
+        std::cout << "  metrics: " << results << '\n';
     }
     return {max_err, cr};
 }
@@ -1559,4 +1532,32 @@ TEST_F(FzgpuModulesTest, OptionalStagesMatchInstalledPublicAPI) {
         const std::string token = name == "cdf97" ? "cdf97:float" : name;
         EXPECT_EQ(documentation.find(token) != std::string::npos, present);
     }
+}
+
+TEST_F(FzgpuModulesTest, CloneHasIndependentPipelineAndOptions) {
+    auto original = lib.get_compressor("fzgpumodules");
+    pressio_options opts;
+    opts.set("pressio:abs", 1e-3);
+    opts.set("fzgpumodules:stages", std::vector<std::string>{"lorenzo:float:uint16", "diff:uint16"});
+    opts.set("fzgpumodules:connections", std::vector<std::string>{"s1 <- s0:codes"});
+    ASSERT_EQ(original->set_options(opts), 0) << original->error_msg();
+    auto archive = pressio_data::empty(pressio_byte_dtype, {});
+    ASSERT_EQ(original->compress(&input, &archive), 0) << original->error_msg();
+    auto copy = original->clone();
+    ASSERT_NE(copy, nullptr);
+    size_t peak = 1;
+    ASSERT_EQ(copy->get_metrics_results().get("fzgpumodules:peak_memory", &peak),
+              pressio_options_key_set);
+    EXPECT_EQ(peak, 0);
+    pressio_options changed;
+    changed.set("pressio:abs", 5e-4);
+    ASSERT_EQ(copy->set_options(changed), 0) << copy->error_msg();
+    double bound = 0;
+    original->get_options().get("pressio:abs", &bound);
+    EXPECT_DOUBLE_EQ(bound, 1e-3);
+    auto copy_archive = pressio_data::empty(pressio_byte_dtype, {});
+    ASSERT_EQ(copy->compress(&input, &copy_archive), 0) << copy->error_msg();
+    auto decoded = pressio_data::empty(input.dtype(), input.dimensions());
+    ASSERT_EQ(copy->decompress(&archive, &decoded), 0) << copy->error_msg();
+    EXPECT_EQ(decoded.dimensions(), input.dimensions());
 }
