@@ -22,6 +22,7 @@ sys.path.insert(0, pressio_path)
 
 import numpy as np
 import libpressio as lp
+from fzgm_helper import Chain
 
 FAILED = 0
 PASSED = 0
@@ -161,19 +162,12 @@ for policy in ("off", "auto"):
 
 # Confirm actual installation, including the lazily built inverse and option rebuild.
 for policy in ("off", "auto"):
-    comp = lp.PressioCompressor.from_config({
-        "compressor_id": "fzgpumodules",
-        "early_config": {
-            "fzgpumodules:stages": ["quantizer:float:uint32", "lorenzo:int32", "adaptive_bitpack:int32"],
-            "fzgpumodules:connections": ["s1 <- s0:codes", "s2 <- s1"],
-            "fzgpumodules:s0:linear_mode": True,
-            "fzgpumodules:s1:block_size": 32,
-            "fzgpumodules:s2:block_size": 32,
-            "fzgpumodules:memory_strategy": "preallocate",
-            "fzgpumodules:specialization": policy,
-        },
-        "compressor_config": {"pressio:abs": 1e-3},
-    })
+    comp = (Chain()
+        .add("quantizer:float:uint32", linear_mode=True)
+        .add("lorenzo:int32", from_port="codes", block_size=32)
+        .add("adaptive_bitpack:int32", block_size=32)
+        .configure(memory_strategy="preallocate", specialization=policy)
+        .compressor(eb=1e-3))
     check(f"integer Lorenzo block_size {policy} readback",
           comp.get_options()["fzgpumodules:s1:block_size"] == 32)
     encoded = comp.encode(partial)

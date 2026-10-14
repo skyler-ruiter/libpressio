@@ -4,11 +4,18 @@ find_package(SWIG)
 if(SWIG_FOUND AND PYTHON3_FOUND)
   include(UseSWIG)
   configure_file(libpressio.py libpressio.py COPYONLY)
+  if(LIBPRESSIO_HAS_FZGPUMODULES)
+    configure_file(fzgm_helper.py fzgm_helper.py COPYONLY)
+  endif()
 
 
   set(CMAKE_SWIG_FLAGS "-doxygen")
   if(NOT LIBPRESSIO_PYTHON_SITELIB)
     set(LIBPRESSIO_PYTHON_SITELIB ${Python3_SITELIB} CACHE PATH "path to install python libraries to")
+  endif()
+  if(LIBPRESSIO_HAS_FZGPUMODULES)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/fzgm_helper.py"
+      DESTINATION ${LIBPRESSIO_PYTHON_SITELIB})
   endif()
   function(build_pressio_swig_module)
     get_filename_component(filelibname ${ARGV0} NAME_WE)
