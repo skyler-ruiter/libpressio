@@ -13,7 +13,7 @@ struct TUPLParams {
     bool operator!=(const TUPLParams& o) const { return !(*this == o); }
 };
 
-class TUPLStageKind : public StageKind {
+class TUPLStageKind : public CloneableStageKind<TUPLStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "tupl"; }
 

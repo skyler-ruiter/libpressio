@@ -34,6 +34,19 @@ For branching pipelines, use the plugin's stages/connections options directly.
 This replaces `from fzgm_helper import Chain` with
 `lp.FZGPUModulesChain()` on new installations.
 
+## Configuration updates
+
+FZGM option updates are transactional: an error restores all top-level values,
+per-stage parameters (including inactive stage settings), and the pipeline's
+previous rebuild state. Successful changes invalidate the cached encoder;
+unchanged options retain it. Type errors and invalid top-level numeric values
+are reported rather than silently ignored. Dimensions require one to three
+integer values; only the first may be zero to select automatic sizing.
+
+Stage-specific ranges, stage tokens, connection topology, and kernel constraints
+are still validated lazily when the pipeline is constructed. A successful
+`set_options()` does not guarantee that a new pipeline can execute.
+
 ## Self-contained output
 
 Each encoded buffer is an FZLP v1 envelope containing the original libpressio

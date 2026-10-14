@@ -12,7 +12,7 @@ struct BitpackParams {
     bool operator!=(const BitpackParams& o) const { return !(*this == o); }
 };
 
-class BitpackStageKind : public StageKind {
+class BitpackStageKind : public CloneableStageKind<BitpackStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "bitpack"; }
 

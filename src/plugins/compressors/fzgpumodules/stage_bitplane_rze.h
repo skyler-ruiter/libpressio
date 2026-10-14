@@ -5,7 +5,7 @@ namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
 // No configurable params: BitplaneRZEStage is a fixed uint16_t-input fused
 // stage (no template parameter, no setters besides setInverse).
-class BitplaneRZEStageKind : public StageKind {
+class BitplaneRZEStageKind : public CloneableStageKind<BitplaneRZEStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "bitplane_rze"; }
 

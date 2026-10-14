@@ -12,7 +12,7 @@ struct AdaptiveBitpackParams {
     bool operator!=(const AdaptiveBitpackParams& o) const { return !(*this == o); }
 };
 
-class AdaptiveBitpackStageKind : public StageKind {
+class AdaptiveBitpackStageKind : public CloneableStageKind<AdaptiveBitpackStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "adaptive_bitpack"; }
 

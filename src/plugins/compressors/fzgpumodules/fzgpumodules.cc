@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <chrono>
 #include <regex>
+#include <tuple>
+#include <cmath>
+#include <limits>
 #include "std_compat/memory.h"
 #include "std_compat/utility.h"
 #include "libpressio_ext/cpp/compressor.h"
@@ -461,51 +464,109 @@ public:
     }
 
     int set_options_impl(struct pressio_options const& options) override {
+        // Serialized callers see either the complete update or the unchanged configuration.
+        auto fields = std::tie(error_bound_abs_, error_bound_rel_, stages_, connections_,
+            primary_source_, memory_strategy_, memory_multiplier_, error_bound_mode_,
+            dims_, num_streams_, graph_mode_, specialization_, config_file_, expose_stage_outputs_);
+        auto saved = std::apply([](const auto&... value) { return std::make_tuple(value...); }, fields);
+        auto saved_fields = std::apply([](auto&... value) { return std::tie(value...); }, saved);
+        std::vector<std::unique_ptr<StageKind>> saved_kinds;
+        for(const auto& kind : stage_kinds_) saved_kinds.push_back(kind->clone());
+        const bool saved_dirty = state_.dirty;
+        auto rollback = [&]() noexcept {
+            fields.swap(saved_fields);
+            stage_kinds_.swap(saved_kinds);
+            state_.dirty = saved_dirty;
+        };
+        try {
+            const int status = apply_options(options);
+            if(status != 0) rollback();
+            return status;
+        } catch(const std::exception& error) {
+            rollback();
+            return set_error(1, std::string("Invalid FZGM configuration: ") + error.what());
+        } catch(...) {
+            rollback();
+            throw;
+        }
+    }
+
+    template<typename T>
+    auto read_option(const pressio_options& options, const std::string& key, T* value) {
+        const auto status = get(options, key, value);
+        if(status == pressio_options_key_exists)
+            throw std::invalid_argument(key + " has the wrong type or no value");
+        return status;
+    }
+
+    int apply_options(struct pressio_options const& options) {
         double old_abs = error_bound_abs_, old_rel = error_bound_rel_;
-        get(options, "pressio:abs", &error_bound_abs_);
-        get(options, "pressio:rel", &error_bound_rel_);
+        read_option(options, "pressio:abs", &error_bound_abs_);
+        read_option(options, "pressio:rel", &error_bound_rel_);
 
         auto old_stages = stages_, old_conns = connections_;
         auto old_primary_source = primary_source_;
-        get(options, "fzgpumodules:stages",         &stages_);
-        get(options, "fzgpumodules:connections",    &connections_);
-        get(options, "fzgpumodules:primary_source", &primary_source_);
+        read_option(options, "fzgpumodules:stages",         &stages_);
+        read_option(options, "fzgpumodules:connections",    &connections_);
+        read_option(options, "fzgpumodules:primary_source", &primary_source_);
 
         std::string old_strategy = memory_strategy_;
-        get(options, "fzgpumodules:memory_strategy", &memory_strategy_);
+        read_option(options, "fzgpumodules:memory_strategy", &memory_strategy_);
         if(!MEMORY_STRATEGIES.contains(memory_strategy_)) {
             auto invalid = memory_strategy_;
-            memory_strategy_ = old_strategy;
             return set_error(1, "Invalid fzgpumodules:memory_strategy: '" + invalid +
                                 "'. Valid: preallocate, minimal");
         }
 
         double old_mult = memory_multiplier_;
-        get(options, "fzgpumodules:memory_multiplier", &memory_multiplier_);
+        read_option(options, "fzgpumodules:memory_multiplier", &memory_multiplier_);
 
         std::string old_mode = error_bound_mode_;
-        get(options, "fzgpumodules:error_bound_mode", &error_bound_mode_);
+        read_option(options, "fzgpumodules:error_bound_mode", &error_bound_mode_);
         if(!ERROR_BOUND_MODES.contains(error_bound_mode_)) {
             auto invalid = error_bound_mode_;
-            error_bound_mode_ = old_mode;
             return set_error(1, "Invalid fzgpumodules:error_bound_mode: '" + invalid +
                                 "'. Valid: abs, rel, noa, prel");
         }
 
         auto old_dims = dims_;
         pressio_data dims_data;
-        if(get(options, "fzgpumodules:dims", &dims_data) == pressio_options_key_set) {
-            auto v = dims_data.to_vector<size_t>();
+        if(read_option(options, "fzgpumodules:dims", &dims_data) == pressio_options_key_set) {
+            std::vector<size_t> v;
+            switch(dims_data.dtype()) {
+                case pressio_uint8_dtype: case pressio_uint16_dtype:
+                case pressio_uint32_dtype: case pressio_uint64_dtype:
+                    for(auto dim : dims_data.to_vector<uint64_t>()) {
+                        if(dim > std::numeric_limits<size_t>::max())
+                            throw std::invalid_argument("dims exceed the host size range");
+                        v.push_back(static_cast<size_t>(dim));
+                    }
+                    break;
+                case pressio_int8_dtype: case pressio_int16_dtype:
+                case pressio_int32_dtype: case pressio_int64_dtype:
+                    for(auto dim : dims_data.to_vector<int64_t>()) {
+                        if(dim < 0 || uint64_t(dim) > std::numeric_limits<size_t>::max())
+                            throw std::invalid_argument("dims must be nonnegative host sizes");
+                        v.push_back(static_cast<size_t>(dim));
+                    }
+                    break;
+                default: throw std::invalid_argument("dims must contain integer values");
+            }
+            if(v.empty() || v.size() > 3)
+                throw std::invalid_argument("dims must contain one to three values");
             dims_.assign(3, size_t(1));
-            dims_[0] = 0;
-            for(size_t i = 0; i < std::min(v.size(), size_t(3)); i++) dims_[i] = v[i];
+            for(size_t i = 0; i < v.size(); ++i) {
+                if(i > 0 && v[i] == 0)
+                    throw std::invalid_argument("only the first dimension may be zero (automatic)");
+                dims_[i] = v[i];
+            }
         }
 
         int64_t old_streams = num_streams_;
-        get(options, "fzgpumodules:num_streams", &num_streams_);
+        read_option(options, "fzgpumodules:num_streams", &num_streams_);
 
         bool old_graph = graph_mode_;
-        get(options, "fzgpumodules:graph_mode", &graph_mode_);
+        read_option(options, "fzgpumodules:graph_mode", &graph_mode_);
 
         std::string removed_fusion;
         if (get(options, "fzgpumodules:fusion", &removed_fusion) != pressio_options_key_does_not_exist)
@@ -521,13 +582,31 @@ public:
         specialization_ = requested_specialization;
 
         std::string old_config_file = config_file_;
-        get(options, "fzgpumodules:config_file", &config_file_);
+        read_option(options, "fzgpumodules:config_file", &config_file_);
 
         bool old_expose = expose_stage_outputs_;
-        get(options, "fzgpumodules:expose_stage_outputs", &expose_stage_outputs_);
+        read_option(options, "fzgpumodules:expose_stage_outputs", &expose_stage_outputs_);
+
+        if(!std::isfinite(error_bound_abs_) || error_bound_abs_ < 0 ||
+           !std::isfinite(error_bound_rel_) || error_bound_rel_ < 0)
+            throw std::invalid_argument("error bounds must be finite and nonnegative");
+        if(!std::isfinite(memory_multiplier_) || memory_multiplier_ <= 0 ||
+           memory_multiplier_ > std::numeric_limits<float>::max() ||
+           static_cast<float>(memory_multiplier_) == 0)
+            throw std::invalid_argument("memory_multiplier must be a finite positive float");
+        if(num_streams_ < 1 || num_streams_ > std::numeric_limits<int>::max())
+            throw std::invalid_argument("num_streams must fit a positive int");
 
         bool stage_params_changed = false;
         for_each_stage([&](StageKind& sk, const std::string& sid, const std::string& tok) {
+            pressio_options expected;
+            sk.populate_options(expected, sid, tok);
+            for(const auto& entry : expected) {
+                if(options.key_status(entry.first) == pressio_options_key_exists ||
+                   (options.key_status(entry.first) == pressio_options_key_set &&
+                    options.get(entry.first).type() != entry.second.type()))
+                    throw std::invalid_argument(entry.first + " has the wrong type");
+            }
             stage_params_changed |= sk.read_options(options, sid, tok);
         });
 

@@ -3,6 +3,7 @@
 #include <string_view>
 #include <vector>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include "libpressio_ext/cpp/options.h"
 #include "fzgpumodules.h"
@@ -54,6 +55,7 @@ struct StageContext {
 
 struct StageKind {
     virtual ~StageKind() = default;
+    virtual std::unique_ptr<StageKind> clone() const = 0;
 
     // Returns true if this handler owns tokens with the given kind prefix.
     virtual bool matches(std::string_view kind) const = 0;
@@ -82,6 +84,14 @@ struct StageKind {
     // post-compress outlier count (size / sizeof(uint32_t) == count).
     // Returns "" for stages that produce no outlier output.
     virtual std::string outlier_indices_key(const std::string& /*token*/) const { return ""; }
+};
+
+// Parameter maps are value-owned; snapshots retain settings for inactive stages too.
+template<typename Derived>
+struct CloneableStageKind : StageKind {
+    std::unique_ptr<StageKind> clone() const override {
+        return std::make_unique<Derived>(static_cast<const Derived&>(*this));
+    }
 };
 
 }}} // namespace libpressio::fzgpumodules::fzgpumodules_ns

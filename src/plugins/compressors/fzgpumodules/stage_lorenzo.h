@@ -24,7 +24,7 @@ struct LorenzoParams {
     bool operator!=(const LorenzoParams& o) const { return !(*this == o); }
 };
 
-class LorenzoStageKind : public StageKind {
+class LorenzoStageKind : public CloneableStageKind<LorenzoStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "lorenzo"; }
 

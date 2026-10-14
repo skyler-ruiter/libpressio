@@ -12,7 +12,7 @@ struct CLOGParams {
     bool operator!=(const CLOGParams& o) const { return !(*this == o); }
 };
 
-class CLOGStageKind : public StageKind {
+class CLOGStageKind : public CloneableStageKind<CLOGStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "clog"; }
 

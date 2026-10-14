@@ -13,7 +13,7 @@ namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 // instead of corrupting device memory (the overflow guard used to be
 // compiled out in Release builds; fixed alongside a couple of related
 // out-of-bounds writes discovered while wiring this handler).
-class ADMStageKind : public StageKind {
+class ADMStageKind : public CloneableStageKind<ADMStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "adm"; }
 

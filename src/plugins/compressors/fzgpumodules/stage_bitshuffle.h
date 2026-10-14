@@ -15,7 +15,7 @@ struct BitshuffleParams {
     bool operator!=(const BitshuffleParams& o) const { return !(*this == o); }
 };
 
-class BitshuffleStageKind : public StageKind {
+class BitshuffleStageKind : public CloneableStageKind<BitshuffleStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "bitshuffle"; }
 

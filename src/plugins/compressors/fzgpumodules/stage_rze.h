@@ -15,7 +15,7 @@ struct RZEParams {
     bool operator!=(const RZEParams& o) const { return !(*this == o); }
 };
 
-class RZEStageKind : public StageKind {
+class RZEStageKind : public CloneableStageKind<RZEStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "rze"; }
 

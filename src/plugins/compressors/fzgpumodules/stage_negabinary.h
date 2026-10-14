@@ -3,7 +3,7 @@
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
-class NegabinaryStageKind : public StageKind {
+class NegabinaryStageKind : public CloneableStageKind<NegabinaryStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "negabinary"; }
 

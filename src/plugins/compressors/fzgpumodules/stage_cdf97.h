@@ -9,7 +9,7 @@ namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 // Quantizer, not lossy itself, so unlike quantizer/lorenzo this stage does
 // NOT read ctx.eb. See docs/stages/cdf97.md in FZGPUModules for the current
 // long-line (shared-memory) size limitation.
-class Cdf97StageKind : public StageKind {
+class Cdf97StageKind : public CloneableStageKind<Cdf97StageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "cdf97"; }
 

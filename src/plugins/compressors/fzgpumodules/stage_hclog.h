@@ -12,7 +12,7 @@ struct HCLOGParams {
     bool operator!=(const HCLOGParams& o) const { return !(*this == o); }
 };
 
-class HCLOGStageKind : public StageKind {
+class HCLOGStageKind : public CloneableStageKind<HCLOGStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "hclog"; }
 

@@ -18,7 +18,7 @@ struct ROIBinSplitParams {
 // (roi, background, meta). Inverse: 3 inputs -> 1 output. Direction swap
 // handled transparently by Pipeline::buildInverseDAG() — no plugin-side
 // handling needed (confirmed empirically against AdaptiveLorenzoStage).
-class ROIBinSplitStageKind : public StageKind {
+class ROIBinSplitStageKind : public CloneableStageKind<ROIBinSplitStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "roibin_split"; }
 

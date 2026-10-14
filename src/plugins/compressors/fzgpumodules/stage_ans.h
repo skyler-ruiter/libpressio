@@ -6,7 +6,7 @@ namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 // No configurable params: the vendored dietGPU kernels only support
 // prob_bits=10 in this build (ANSStage::setProbBits is reserved for future
 // use and throws on any other value), so it is intentionally not exposed.
-class ANSStageKind : public StageKind {
+class ANSStageKind : public CloneableStageKind<ANSStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "ans"; }
 

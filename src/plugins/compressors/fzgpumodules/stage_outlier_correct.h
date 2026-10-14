@@ -17,7 +17,7 @@ namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 // done via a "sN <- __external__" connection string in
 // fzgpumodules:connections, not here. See docs/libpressio_python.md's SPERR
 // recipe for the full pipeline.
-class Cdf97OutlierCorrectStageKind : public StageKind {
+class Cdf97OutlierCorrectStageKind : public CloneableStageKind<Cdf97OutlierCorrectStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "cdf97_outlier_correct"; }
 

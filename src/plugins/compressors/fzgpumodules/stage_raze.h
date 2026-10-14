@@ -12,7 +12,7 @@ struct RAZEParams {
     bool operator!=(const RAZEParams& o) const { return !(*this == o); }
 };
 
-class RAZEStageKind : public StageKind {
+class RAZEStageKind : public CloneableStageKind<RAZEStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "raze"; }
 

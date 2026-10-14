@@ -8,7 +8,7 @@ namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 // signed int32 codes (the same convention QuantizerStage's linear_mode
 // emits), no per-stage options. Not a port of SPERR's SPECK bitstream --
 // see FZGPUModules' THIRD_PARTY.md and docs/stages/speck2d.md.
-class Speck2DStageKind : public StageKind {
+class Speck2DStageKind : public CloneableStageKind<Speck2DStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "speck2d"; }
 
