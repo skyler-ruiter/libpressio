@@ -197,13 +197,10 @@ for policy in ("off", "auto"):
           comp.get_options()["fzgpumodules:s1:block_size"] == 32)
     encoded = comp.encode(partial)
     fresh_decoder = lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})
-    try:
-        fresh_decoder.decode(encoded, np.empty_like(partial))
-    except lp.PressioException as exc:
-        check(f"{policy} fresh decoder reports pipeline requirement",
-              "prior compress call" in str(exc), str(exc))
-    else:
-        check(f"{policy} fresh decoder reports pipeline requirement", False)
+    fresh_result = np.asarray(fresh_decoder.decode(encoded))
+    check(f"{policy} fresh decoder restores dtype/shape",
+          fresh_result.dtype == partial.dtype and fresh_result.shape == partial.shape)
+    check(f"{policy} fresh decoder accuracy", np.abs(fresh_result-partial).max() <= 1e-3 + 1e-6)
     metrics = comp.get_metrics()
     check(f"{policy} forward specialization installed",
           metrics["fzgpumodules:specialization_forward_groups"] == (1 if policy == "auto" else 0))

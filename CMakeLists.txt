@@ -407,6 +407,12 @@ if(LIBPRESSIO_HAS_FZGPUMODULES)
   if(NOT LIBPRESSIO_FZGM_PUBLIC_API_USABLE)
     message(FATAL_ERROR "The installed FZGPUModules public header cannot be compiled")
   endif()
+  unset(LIBPRESSIO_FZGM_HAS_ARCHIVE_RESTORE CACHE)
+  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { using P = decltype(fz::Pipeline::fromHeader(nullptr, 0)); return sizeof(P) == 0; }"
+    LIBPRESSIO_FZGM_HAS_ARCHIVE_RESTORE)
+  if(NOT LIBPRESSIO_FZGM_HAS_ARCHIVE_RESTORE)
+    message(FATAL_ERROR "Self-contained FZGM output requires an SDK with Pipeline::fromHeader; released v2.0.0 lacks this API")
+  endif()
   check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::ADMStage* p = nullptr; (void)p; }"
     LIBPRESSIO_FZGM_HAS_ADM)
   check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::SZpStage<float>* p = nullptr; (void)p; }"

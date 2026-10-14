@@ -170,5 +170,10 @@ if(LIBPRESSIO_HAS_FZGPUMODULES)
       ${CMAKE_CURRENT_SOURCE_DIR}/test_fzgm_python.py
       ${CMAKE_BINARY_DIR}/tools/swig
     )
+    add_test(test_fzgm_archive_python
+      ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test_fzgm_archive_python.py
+      ${CMAKE_BINARY_DIR}/tools/swig
+    )
   endif()
 endif()
