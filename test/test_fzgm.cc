@@ -1486,16 +1486,22 @@ TEST_F(FzgpuModulesTest, PartialFixedBlockOffAndAuto) {
     }
 }
 
-TEST_F(FzgpuModulesTest, FreshDecoderRequiresPriorCompression) {
+TEST_F(FzgpuModulesTest, FreshDecoderRestoresArchiveWithoutPriorCompression) {
     auto encoder = lib.get_compressor("fzgpumodules");
     auto decoder = lib.get_compressor("fzgpumodules");
     ASSERT_TRUE(!!encoder);
     ASSERT_TRUE(!!decoder);
     pressio_data compressed = pressio_data::empty(pressio_byte_dtype, {});
     ASSERT_EQ(encoder->compress(&input, &compressed), 0) << encoder->error_msg();
-    auto output = pressio_data::owning(input.dtype(), input.dimensions());
-    EXPECT_NE(decoder->decompress(&compressed, &output), 0);
-    EXPECT_NE(std::string(decoder->error_msg()).find("prior compress"), std::string::npos);
+    auto output = pressio_data::empty(pressio_byte_dtype, {});
+    ASSERT_EQ(decoder->decompress(&compressed, &output), 0) << decoder->error_msg();
+    EXPECT_EQ(output.dtype(), input.dtype());
+    EXPECT_EQ(output.dimensions(), input.dimensions());
+    auto in_values = input.to_vector<float>();
+    auto out_values = output.to_vector<float>();
+    ASSERT_EQ(in_values.size(), out_values.size());
+    for(size_t i = 0; i < in_values.size(); ++i)
+        ASSERT_LE(std::abs(in_values[i]-out_values[i]), 1e-3 + 1e-6) << i;
 }
 
 TEST_F(FzgpuModulesTest, UnavailableLegacyStagesRejectCleanly) {

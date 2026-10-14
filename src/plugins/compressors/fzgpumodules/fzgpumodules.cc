@@ -15,6 +15,7 @@
 // Stage handlers — adding a new stage: create stage_<name>.h, include it here,
 // push a make_unique<XStageKind>() in make_stage_kinds() below.
 #include "stage_kind.h"
+#include "archive.h"
 #include "stage_lorenzo.h"
 #include "stage_quantizer.h"
 #include "stage_diff.h"
@@ -572,19 +573,7 @@ public:
 
     int decompress_impl(const pressio_data* input, struct pressio_data* output) override {
         try {
-            switch(output->dtype()) {
-                case pressio_float_dtype:   return decompress_typed<float>(input, output);
-                case pressio_double_dtype:  return decompress_typed<double>(input, output);
-                case pressio_int8_dtype:    return decompress_typed<int8_t>(input, output);
-                case pressio_int16_dtype:   return decompress_typed<int16_t>(input, output);
-                case pressio_int32_dtype:   return decompress_typed<int32_t>(input, output);
-                case pressio_int64_dtype:   return decompress_typed<int64_t>(input, output);
-                case pressio_uint8_dtype:   return decompress_typed<uint8_t>(input, output);
-                case pressio_uint16_dtype:  return decompress_typed<uint16_t>(input, output);
-                case pressio_uint32_dtype:  return decompress_typed<uint32_t>(input, output);
-                case pressio_uint64_dtype:  return decompress_typed<uint64_t>(input, output);
-                default: return set_error(1, "Unsupported data type for FZGpuModules decompression");
-            }
+            return decompress_archive(input, output);
         } catch(std::exception const& ex) {
             return set_error(2, std::string("Decompression exception: ") + ex.what());
         }
@@ -595,9 +584,9 @@ public:
     // =========================================================================
 
     int major_version() const override { return 0; }
-    int minor_version() const override { return 0; }
-    int patch_version() const override { return 1; }
-    const char* version() const override { return "0.0.1"; }
+    int minor_version() const override { return 1; }
+    int patch_version() const override { return 0; }
+    const char* version() const override { return "0.1.0"; }
     const char* prefix() const override { return "fzgpumodules"; }
 
     std::shared_ptr<libpressio_compressor_plugin> clone() override {
@@ -818,58 +807,73 @@ private:
             parse_stage_outputs(h_buf.data(), output_size);
         }
 
-        // comp is pool-owned; copy into a fresh cudaMalloc allocation so pressio_data
-        // owns a buffer it can cudaFree without touching the pool on the next compress().
-        void* d_output = nullptr;
-        cudaMalloc(&d_output, output_size);
-        cudaMemcpyAsync(d_output, comp.data(), output_size,
-                        cudaMemcpyDeviceToDevice, stream_);
-        cudaStreamSynchronize(stream_);
-
-        *output = pressio_data::move(
-            pressio_byte_dtype, d_output, {output_size},
-            domain_plugins().build("cudamalloc"));
+        auto metadata = make_archive_metadata(*real_input,
+            state_.ptr->serializeHeaderToMemory(), output_size);
+        const size_t archive_size = metadata.size() + output_size;
+        auto archive = pressio_data::owning(pressio_byte_dtype, {archive_size},
+                                           domain_plugins().build("cudamalloc"));
+        auto check_cuda = [](cudaError_t error) {
+            if(error != cudaSuccess) throw std::runtime_error(cudaGetErrorString(error));
+        };
+        check_cuda(cudaMemcpyAsync(archive.data(), metadata.data(), metadata.size(),
+                                   cudaMemcpyHostToDevice, stream_));
+        check_cuda(cudaMemcpyAsync(static_cast<uint8_t*>(archive.data()) + metadata.size(),
+                                   comp.data(), output_size, cudaMemcpyDeviceToDevice, stream_));
+        check_cuda(cudaStreamSynchronize(stream_));
+        const bool wants_device = real_input->domain()->domain_id() == "cudamalloc" ||
+                                  output->domain()->domain_id() == "cudamalloc";
+        *output = wants_device ? std::move(archive)
+            : domain_manager().make_readable(domain_plugins().build("malloc"), std::move(archive));
         return 0;
     }
 
-    template<typename T>
-    int decompress_typed(const pressio_data* compressed_input, struct pressio_data* output) {
-        if(!state_.ptr)
-            return set_error(5, "Decompression requires a pipeline built by a prior compress call");
+    int decompress_archive(const pressio_data* input, pressio_data* output) {
+        const bool wants_device = output->domain()->domain_id() == "cudamalloc";
+        auto compressed = domain_manager().make_readable(domain_plugins().build("cudamalloc"), *input);
+        const size_t total = compressed.size_in_bytes();
+        if(total < ArchiveMetadata::prefix_size)
+            throw std::runtime_error("Truncated FZGM archive prefix");
+        auto check_cuda = [](cudaError_t error) {
+            if(error != cudaSuccess) throw std::runtime_error(cudaGetErrorString(error));
+        };
+        std::vector<uint8_t> metadata(ArchiveMetadata::prefix_size);
+        check_cuda(cudaMemcpy(metadata.data(), compressed.data(), metadata.size(), cudaMemcpyDeviceToHost));
+        const size_t metadata_size = archive_metadata_size(metadata.data(), total);
+        metadata.resize(metadata_size);
+        check_cuda(cudaMemcpy(metadata.data(), compressed.data(), metadata.size(), cudaMemcpyDeviceToHost));
+        const auto archive = parse_archive_metadata(metadata.data(), total);
+        if(output->num_elements() != 0 &&
+           (output->dtype() != archive.dtype || output->dimensions() != archive.dims))
+            throw std::runtime_error("FZGM archive dtype/shape does not match requested output");
 
-        const pressio_dtype out_dtype   = output->dtype();
-        const auto          out_dims    = output->dimensions();
-        // Caller-requested output domain, captured before *output is overwritten below.
-        // A caller who passed a GPU-resident buffer (e.g. a CuPy array via
-        // __cuda_array_interface__) gets a GPU-resident result back with no D2H copy;
-        // everyone else (numpy arrays, out=None) keeps the previous host-copy behavior.
-        const bool           out_wants_device = output->domain()->domain_id() == "cudamalloc";
-
-        // decompressOwned() returns a caller-owned OwnedDeviceBuffer regardless of any
-        // pipeline flag; release() transfers the cudaMalloc'd pointer to pressio_data.
-        fz::OwnedDeviceBuffer dec;
-        try {
-            if (graph_mode_) {
-                // Empty span => read the live DAG buffers from the last compress()
-                // (the same as the old nullptr path): avoids the external concat parse
-                // that would corrupt buffer_metadata_ and break the next compress().
-                dec = state_.ptr->decompressOwned({}, stream_);
-            } else {
-                pressio_data gpu_compressed = domain_manager().make_readable(
-                    domain_plugins().build("cudamalloc"), *compressed_input);
-                dec = state_.ptr->decompressOwned(
-                    {gpu_compressed.data(), gpu_compressed.size_in_bytes()}, stream_);
-            }
-        } catch(std::exception const& ex) {
-            return set_error(4, std::string("Decompression execution failed: ") + ex.what());
+        if(archive.segment_sizes.size() > 1) {
+            const size_t concat_size = 4 + 8*archive.segment_sizes.size();
+            if(concat_size > archive.payload_size)
+                throw std::runtime_error("Truncated FZGM concat header");
+            std::vector<uint8_t> concat(concat_size);
+            check_cuda(cudaMemcpy(concat.data(), static_cast<uint8_t*>(compressed.data()) +
+                                   archive.payload_offset, concat.size(), cudaMemcpyDeviceToHost));
+            if(archive_read(concat.data(), 4) != archive.segment_sizes.size())
+                throw std::runtime_error("FZGM concat count disagrees with archive metadata");
+            for(size_t i = 0; i < archive.segment_sizes.size(); ++i)
+                if(archive_read(concat.data()+4+8*i, 8) != archive.segment_sizes[i])
+                    throw std::runtime_error("FZGM concat length disagrees with archive metadata");
         }
-
-        pressio_data gpu_output = pressio_data::move(
-            out_dtype, dec.release(), out_dims,
-            domain_plugins().build("cudamalloc"));
-        *output = out_wants_device
-            ? std::move(gpu_output)
+        // Reconstruct from this payload, never from the encoder's most recent state.
+        auto decoder = fz::Pipeline::fromHeader(archive.header.data(), archive.header.size(),
+            MEMORY_STRATEGIES.at(memory_strategy_), SPECIALIZATION_POLICIES.at(specialization_));
+        auto restored = decoder->decompressOwned(
+            {static_cast<uint8_t*>(compressed.data()) + archive.payload_offset, archive.payload_size}, stream_);
+        if(restored.bytes() != archive.output_size)
+            throw std::runtime_error("FZGM decoded size does not match archive shape");
+        auto gpu_output = pressio_data::move(archive.dtype, restored.release(), archive.dims,
+                                            domain_plugins().build("cudamalloc"));
+        *output = wants_device ? std::move(gpu_output)
             : domain_manager().make_readable(domain_plugins().build("malloc"), std::move(gpu_output));
+        state_.ptr = std::move(decoder);
+        state_.dirty = true; // A later encode must reconstruct its configured forward pipeline.
+        state_.outlier_stages.clear();
+        state_.terminal_outputs.clear();
         return 0;
     }
 

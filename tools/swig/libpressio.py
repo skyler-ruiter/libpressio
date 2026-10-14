@@ -657,8 +657,15 @@ class PressioCompressor(PressioObject, Codec):
         decompressed_lp = None
         cleanup_dec = True
         try:
-            compressed_lp = python_to_new_pressio_data(buf)
-            decompressed_lp = python_to_new_pressio_data(out)
+            if self._object_id == "fzgpumodules" and isinstance(buf, bytes):
+                compressed_lp = pressio.io_data_from_bytes(buf)
+            else:
+                compressed_lp = python_to_new_pressio_data(buf)
+            if out is None and self._object_id == "fzgpumodules":
+                # FZGM archives supply their own dtype and dimensions.
+                decompressed_lp = pressio.data_new_empty(pressio.byte_dtype, pressio.vector_uint64_t())
+            else:
+                decompressed_lp = python_to_new_pressio_data(out)
 
             rc = pressio.compressor_decompress(self._object, compressed_lp, decompressed_lp)
             if rc:
@@ -860,8 +867,8 @@ class FZGPUModulesChain:
     """Build a linear pipeline for the optional FZGPUModules plugin.
 
     Creating a compressor requires libpressio built with FZGPUModules support.
-    Decode using the same compressor instance that encoded the data; the plugin
-    does not yet restore its pipeline from the compressed bytes alone.
+    Encoded output includes pipeline metadata, dtype, and dimensions. A fresh
+    FZGPUModules compressor can decode it without reconstructing this chain.
 
     Each add() call appends one stage, auto-numbers it sN, and wires it to
     the previous stage's output (default port, or a named one via
