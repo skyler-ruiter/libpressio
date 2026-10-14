@@ -114,10 +114,16 @@ check("rze chunk_size takes effect (ratio differs from default)", ok and ratio !
 # ── New stages from this session: smoke-test that the Python token strings
 # work end to end (not exhaustive -- see test_fzgm.cc for full coverage).
 
+available_optional_stages = lp.PressioCompressor.from_config(
+    {"compressor_id": "fzgpumodules"}).get_configuration()["fzgpumodules:optional_stages"]
+
 for token, dtype, needs_dims in [
     ("szx:float", np.float32, False),
     ("adaptive_bitpack:int32", np.int32, False),
 ]:
+    if token.split(":")[0] == "szx" and "szx" not in available_optional_stages:
+        print("SKIPPED: szx:float round-trip (absent from installed SDK public API)")
+        continue
     if dtype == np.int32:
         rng = np.random.default_rng(0)
         d = rng.integers(-1000, 1000, size=256 * 256).astype(np.int32)
