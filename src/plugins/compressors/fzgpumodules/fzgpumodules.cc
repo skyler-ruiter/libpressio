@@ -3,10 +3,6 @@
 #include <map>
 #include <algorithm>
 #include <chrono>
-#include <regex>
-#include <tuple>
-#include <cmath>
-#include <limits>
 #include "std_compat/memory.h"
 #include "std_compat/utility.h"
 #include "libpressio_ext/cpp/compressor.h"
@@ -15,51 +11,12 @@
 #include "libpressio_ext/cpp/pressio.h"
 #include "libpressio_ext/cpp/domain_manager.h"
 
-#include "stage_registry.h"
+#include "pipeline_builder.h"
 #include "archive.h"
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
 using namespace libpressio::compressors;  // brings libpressio_compressor_plugin, compressor_plugins, etc.
-
-// =============================================================================
-// Pipeline-level helpers
-// =============================================================================
-
-static const std::map<std::string, fz::MemoryStrategy> MEMORY_STRATEGIES {
-    {"preallocate", fz::MemoryStrategy::PREALLOCATE},
-    {"minimal",     fz::MemoryStrategy::MINIMAL},
-};
-
-static const std::map<std::string, fz::ErrorBoundMode> ERROR_BOUND_MODES {
-    {"abs",  fz::ErrorBoundMode::ABS},
-    {"rel",  fz::ErrorBoundMode::REL},
-    {"noa",  fz::ErrorBoundMode::NOA},
-    {"prel", fz::ErrorBoundMode::PREL},
-};
-
-static const std::map<std::string, fz::SpecializationPolicy> SPECIALIZATION_POLICIES {
-    {"off",  fz::SpecializationPolicy::Off},
-    {"auto", fz::SpecializationPolicy::Auto},
-};
-
-template <class T>
-static std::vector<std::string> map_keys(std::map<std::string, T> const& m) {
-    std::vector<std::string> keys;
-    keys.reserve(m.size());
-    for (auto const& kv : m) keys.push_back(kv.first);
-    return keys;
-}
-
-struct ParsedConnection { std::string to, from, port; };
-
-static ParsedConnection parse_connection(const std::string& s) {
-    static const std::regex re(R"(^\s*(\S+)\s*<-\s*(\S+?)(?::(\S+))?\s*$)");
-    std::smatch m;
-    if(!std::regex_match(s, m, re))
-        throw std::invalid_argument("Invalid connection (expected 'sN <- sM[:port]'): " + s);
-    return {m[1].str(), m[2].str(), m[3].str()};
-}
 
 // =============================================================================
 // RAII helpers
@@ -89,70 +46,6 @@ struct CudaStream {
     }
 };
 
-struct OutlierStageRef {
-    fz::Stage*  ptr;
-    std::string indices_key;  // output port whose size / 4 == outlier count
-};
-
-struct TerminalOutput {
-    std::string   metric_key;  // "fzgpumodules:sN:output:<port>"
-    pressio_dtype dtype;
-};
-
-struct PipelineState {
-    std::unique_ptr<fz::Pipeline>              ptr;
-    bool   dirty     = true;
-    size_t last_size = 0;
-    std::vector<std::pair<std::string, OutlierStageRef>> outlier_stages;   // sid → stage ref
-    std::vector<TerminalOutput>                          terminal_outputs;  // ordered terminal ports
-
-    PipelineState() = default;
-    PipelineState(PipelineState&&) = default;
-    PipelineState& operator=(PipelineState&&) = default;
-    PipelineState(PipelineState const&) = delete;
-    PipelineState& operator=(PipelineState const&) = delete;
-};
-
-// =============================================================================
-// Pipeline construction helpers
-// =============================================================================
-
-// Apply common per-pipeline settings after construction.
-// Pass dims=nullptr in config-file mode (the TOML sets dims internally).
-static void configure_pipeline_base(fz::Pipeline& p,
-                                     const std::array<size_t,3>* dims,
-                                     int num_streams,
-                                     fz::SpecializationPolicy specialization_policy) {
-    // Decompress ownership is chosen at the call site via decompressOwned(); no flag needed.
-    if (dims) p.setDims(*dims);
-    if (num_streams > 1) p.setNumStreams(num_streams);
-    p.setSpecializationPolicy(specialization_policy);
-}
-
-// Run warmup + graph capture after finalize(), if graph_mode is set.
-static void maybe_capture_graph(fz::Pipeline& p, cudaStream_t stream, bool graph_mode) {
-    if (graph_mode) {
-        p.warmup(stream);
-        p.captureGraph(stream);
-    }
-}
-
-static pressio_dtype fz_to_pressio_dtype(fz::DataType dt) {
-    switch (dt) {
-        case fz::DataType::UINT8:   return pressio_uint8_dtype;
-        case fz::DataType::UINT16:  return pressio_uint16_dtype;
-        case fz::DataType::UINT32:  return pressio_uint32_dtype;
-        case fz::DataType::UINT64:  return pressio_uint64_dtype;
-        case fz::DataType::INT8:    return pressio_int8_dtype;
-        case fz::DataType::INT16:   return pressio_int16_dtype;
-        case fz::DataType::INT32:   return pressio_int32_dtype;
-        case fz::DataType::INT64:   return pressio_int64_dtype;
-        case fz::DataType::FLOAT32: return pressio_float_dtype;
-        case fz::DataType::FLOAT64: return pressio_double_dtype;
-        default:                    return pressio_byte_dtype;
-    }
-}
-
 // =============================================================================
 // Main plugin class
 // =============================================================================
@@ -169,23 +62,23 @@ public:
     struct pressio_options get_options_impl() const override {
         struct pressio_options options;
 
-        set(options, "pressio:abs", error_bound_abs_);
-        set(options, "pressio:rel", error_bound_rel_);
-        set(options, "fzgpumodules:memory_strategy",   memory_strategy_);
-        set(options, "fzgpumodules:memory_multiplier", memory_multiplier_);
-        set(options, "fzgpumodules:error_bound_mode",  error_bound_mode_);
-        set(options, "fzgpumodules:dims", pressio_data(dims_.begin(), dims_.end()));
-        set(options, "fzgpumodules:num_streams", num_streams_);
-        set(options, "fzgpumodules:graph_mode",  graph_mode_);
-        set(options, "fzgpumodules:specialization", specialization_);
-        set(options, "fzgpumodules:stages",               stages_);
-        set(options, "fzgpumodules:connections",          connections_);
-        set(options, "fzgpumodules:primary_source",       primary_source_);
-        set(options, "fzgpumodules:config_file",          config_file_);
-        set(options, "fzgpumodules:expose_stage_outputs", expose_stage_outputs_);
+        set(options, "pressio:abs", config_.error_bound_abs);
+        set(options, "pressio:rel", config_.error_bound_rel);
+        set(options, "fzgpumodules:memory_strategy",   config_.memory_strategy);
+        set(options, "fzgpumodules:memory_multiplier", config_.memory_multiplier);
+        set(options, "fzgpumodules:error_bound_mode",  config_.error_bound_mode);
+        set(options, "fzgpumodules:dims", pressio_data(config_.dims.begin(), config_.dims.end()));
+        set(options, "fzgpumodules:num_streams", config_.num_streams);
+        set(options, "fzgpumodules:graph_mode",  config_.graph_mode);
+        set(options, "fzgpumodules:specialization", config_.specialization);
+        set(options, "fzgpumodules:stages",               config_.stages);
+        set(options, "fzgpumodules:connections",          config_.connections);
+        set(options, "fzgpumodules:primary_source",       config_.primary_source);
+        set(options, "fzgpumodules:config_file",          config_.config_file);
+        set(options, "fzgpumodules:expose_stage_outputs", config_.expose_stage_outputs);
 
-        if (config_file_.empty()) {
-            for_each_stage([&](const StageKind& sk, const std::string& sid, const std::string& tok) {
+        if (config_.config_file.empty()) {
+            config_.for_each_stage([&](const StageKind& sk, const std::string& sid, const std::string& tok) {
                 sk.populate_options(options, sid, tok);
             });
         }
@@ -275,7 +168,7 @@ public:
             "implementations for supported stage combinations and otherwise uses staged execution. "
             "It is not a per-input profitability predictor and is mutually exclusive with CUDA Graph mode. "
             "FZ_SPECIALIZE overrides the policy at pipeline-build time. "
-            "Inspect specialization_* metrics after encode/decode to confirm installation. "
+            "Inspect config_.specialization* metrics after encode/decode to confirm installation. "
             "Use fzgpumodules:specialization in Python and C++ configurations.");
         set(options, "fzgpumodules:stages",
             "Ordered list of stage tokens.\n"
@@ -364,8 +257,8 @@ public:
             "reusing the cached one. execution_time_us excludes build cost either way, so a "
             "timing loop should discard measurements where this is true, or warm up first.");
 
-        if (config_file_.empty()) {
-            for_each_stage([&](const StageKind& sk, const std::string& sid, const std::string& tok) {
+        if (config_.config_file.empty()) {
+            config_.for_each_stage([&](const StageKind& sk, const std::string& sid, const std::string& tok) {
                 sk.populate_documentation(options, sid, tok);
                 if(!sk.outlier_indices_key(tok).empty())
                     set(options, "fzgpumodules:" + sid + ":outlier_count",
@@ -376,166 +269,20 @@ public:
         return options;
     }
 
-    int set_options_impl(struct pressio_options const& options) override {
-        // Serialized callers see either the complete update or the unchanged configuration.
-        auto fields = std::tie(error_bound_abs_, error_bound_rel_, stages_, connections_,
-            primary_source_, memory_strategy_, memory_multiplier_, error_bound_mode_,
-            dims_, num_streams_, graph_mode_, specialization_, config_file_, expose_stage_outputs_);
-        auto saved = std::apply([](const auto&... value) { return std::make_tuple(value...); }, fields);
-        auto saved_fields = std::apply([](auto&... value) { return std::tie(value...); }, saved);
-        auto saved_kinds = stage_kinds_;
-        const bool saved_dirty = state_.dirty;
-        auto rollback = [&]() noexcept {
-            fields.swap(saved_fields);
-            stage_kinds_.swap(saved_kinds);
-            state_.dirty = saved_dirty;
-        };
+    int set_options_impl(const pressio_options& options) override {
         try {
-            const int status = apply_options(options);
-            if(status != 0) rollback();
-            return status;
+            auto candidate = config_;
+            const bool stage_changed = candidate.read_options(options,
+                [this](const auto& opts, const std::string& key, auto* value) {
+                    return get(opts, key, value);
+                });
+            const bool changed = stage_changed || !config_.same_values(candidate);
+            config_.swap(candidate);
+            state_.dirty |= changed;
+            return 0;
         } catch(const std::exception& error) {
-            rollback();
             return set_error(1, std::string("Invalid FZGM configuration: ") + error.what());
-        } catch(...) {
-            rollback();
-            throw;
         }
-    }
-
-    template<typename T>
-    auto read_option(const pressio_options& options, const std::string& key, T* value) {
-        const auto status = get(options, key, value);
-        if(status == pressio_options_key_exists)
-            throw std::invalid_argument(key + " has the wrong type or no value");
-        return status;
-    }
-
-    int apply_options(struct pressio_options const& options) {
-        double old_abs = error_bound_abs_, old_rel = error_bound_rel_;
-        read_option(options, "pressio:abs", &error_bound_abs_);
-        read_option(options, "pressio:rel", &error_bound_rel_);
-
-        auto old_stages = stages_, old_conns = connections_;
-        auto old_primary_source = primary_source_;
-        read_option(options, "fzgpumodules:stages",         &stages_);
-        read_option(options, "fzgpumodules:connections",    &connections_);
-        read_option(options, "fzgpumodules:primary_source", &primary_source_);
-
-        std::string old_strategy = memory_strategy_;
-        read_option(options, "fzgpumodules:memory_strategy", &memory_strategy_);
-        if(!MEMORY_STRATEGIES.contains(memory_strategy_)) {
-            auto invalid = memory_strategy_;
-            return set_error(1, "Invalid fzgpumodules:memory_strategy: '" + invalid +
-                                "'. Valid: preallocate, minimal");
-        }
-
-        double old_mult = memory_multiplier_;
-        read_option(options, "fzgpumodules:memory_multiplier", &memory_multiplier_);
-
-        std::string old_mode = error_bound_mode_;
-        read_option(options, "fzgpumodules:error_bound_mode", &error_bound_mode_);
-        if(!ERROR_BOUND_MODES.contains(error_bound_mode_)) {
-            auto invalid = error_bound_mode_;
-            return set_error(1, "Invalid fzgpumodules:error_bound_mode: '" + invalid +
-                                "'. Valid: abs, rel, noa, prel");
-        }
-
-        auto old_dims = dims_;
-        pressio_data dims_data;
-        if(read_option(options, "fzgpumodules:dims", &dims_data) == pressio_options_key_set) {
-            std::vector<size_t> v;
-            switch(dims_data.dtype()) {
-                case pressio_uint8_dtype: case pressio_uint16_dtype:
-                case pressio_uint32_dtype: case pressio_uint64_dtype:
-                    for(auto dim : dims_data.to_vector<uint64_t>()) {
-                        if(dim > std::numeric_limits<size_t>::max())
-                            throw std::invalid_argument("dims exceed the host size range");
-                        v.push_back(static_cast<size_t>(dim));
-                    }
-                    break;
-                case pressio_int8_dtype: case pressio_int16_dtype:
-                case pressio_int32_dtype: case pressio_int64_dtype:
-                    for(auto dim : dims_data.to_vector<int64_t>()) {
-                        if(dim < 0 || uint64_t(dim) > std::numeric_limits<size_t>::max())
-                            throw std::invalid_argument("dims must be nonnegative host sizes");
-                        v.push_back(static_cast<size_t>(dim));
-                    }
-                    break;
-                default: throw std::invalid_argument("dims must contain integer values");
-            }
-            if(v.empty() || v.size() > 3)
-                throw std::invalid_argument("dims must contain one to three values");
-            dims_.assign(3, size_t(1));
-            for(size_t i = 0; i < v.size(); ++i) {
-                if(i > 0 && v[i] == 0)
-                    throw std::invalid_argument("only the first dimension may be zero (automatic)");
-                dims_[i] = v[i];
-            }
-        }
-
-        int64_t old_streams = num_streams_;
-        read_option(options, "fzgpumodules:num_streams", &num_streams_);
-
-        bool old_graph = graph_mode_;
-        read_option(options, "fzgpumodules:graph_mode", &graph_mode_);
-
-        std::string removed_fusion;
-        if (get(options, "fzgpumodules:fusion", &removed_fusion) != pressio_options_key_does_not_exist)
-            return set_error(1, "fzgpumodules:fusion was removed; use fzgpumodules:specialization");
-        const std::string old_specialization = specialization_;
-        std::string requested_specialization = specialization_;
-        auto status = get(options, "fzgpumodules:specialization", &requested_specialization);
-        if (status == pressio_options_key_exists)
-            return set_error(1, "fzgpumodules:specialization must be a string");
-        if (!SPECIALIZATION_POLICIES.contains(requested_specialization))
-            return set_error(1, "Invalid fzgpumodules:specialization: '" + requested_specialization +
-                                "'. Valid: off, auto");
-        specialization_ = requested_specialization;
-
-        std::string old_config_file = config_file_;
-        read_option(options, "fzgpumodules:config_file", &config_file_);
-
-        bool old_expose = expose_stage_outputs_;
-        read_option(options, "fzgpumodules:expose_stage_outputs", &expose_stage_outputs_);
-
-        if(!std::isfinite(error_bound_abs_) || error_bound_abs_ < 0 ||
-           !std::isfinite(error_bound_rel_) || error_bound_rel_ < 0)
-            throw std::invalid_argument("error bounds must be finite and nonnegative");
-        if(!std::isfinite(memory_multiplier_) || memory_multiplier_ <= 0 ||
-           memory_multiplier_ > std::numeric_limits<float>::max() ||
-           static_cast<float>(memory_multiplier_) == 0)
-            throw std::invalid_argument("memory_multiplier must be a finite positive float");
-        if(num_streams_ < 1 || num_streams_ > std::numeric_limits<int>::max())
-            throw std::invalid_argument("num_streams must fit a positive int");
-
-        bool stage_params_changed = false;
-        for_each_stage([&](StageKind& sk, const std::string& sid, const std::string& tok) {
-            pressio_options expected;
-            sk.populate_options(expected, sid, tok);
-            for(const auto& entry : expected) {
-                if(options.key_status(entry.first) == pressio_options_key_exists ||
-                   (options.key_status(entry.first) == pressio_options_key_set &&
-                    options.get(entry.first).type() != entry.second.type()))
-                    throw std::invalid_argument(entry.first + " has the wrong type");
-            }
-            stage_params_changed |= sk.read_options(options, sid, tok);
-        });
-
-        if(stages_ != old_stages || connections_ != old_conns ||
-           primary_source_ != old_primary_source ||
-           memory_strategy_ != old_strategy || memory_multiplier_ != old_mult ||
-           error_bound_abs_ != old_abs || error_bound_rel_ != old_rel ||
-           error_bound_mode_ != old_mode || dims_ != old_dims ||
-           num_streams_ != old_streams || graph_mode_ != old_graph ||
-           specialization_ != old_specialization ||
-           config_file_ != old_config_file || expose_stage_outputs_ != old_expose ||
-           stage_params_changed)
-        {
-            state_.dirty = true;
-        }
-
-        return 0;
     }
 
     // =========================================================================
@@ -612,121 +359,6 @@ public:
 
 private:
     // =========================================================================
-    // Stage-aware pipeline builder
-    // =========================================================================
-
-    void build_pipeline(size_t data_size) {
-        std::vector<ParsedConnection> connections;
-        connections.reserve(connections_.size());
-        for(const auto& text : connections_) connections.push_back(parse_connection(text));
-
-        if (graph_mode_) {
-            for (auto& tok : stages_)
-                if (token_kind(tok) == "rze")
-                    throw std::runtime_error(
-                        "fzgpumodules:graph_mode=true is incompatible with the rze stage");
-        }
-
-        fz::MemoryStrategy strategy = graph_mode_
-            ? fz::MemoryStrategy::PREALLOCATE
-            : MEMORY_STRATEGIES.at(memory_strategy_);
-
-        state_.outlier_stages.clear();
-        state_.ptr.reset(new fz::Pipeline(data_size, strategy, static_cast<float>(memory_multiplier_)));
-        const std::array<size_t,3> fz_dims = {dims_[0], dims_[1], dims_[2]};
-        configure_pipeline_base(*state_.ptr, &fz_dims, static_cast<int>(num_streams_), SPECIALIZATION_POLICIES.at(specialization_));
-
-        StageContext ctx{
-            *state_.ptr,
-            ERROR_BOUND_MODES.at(error_bound_mode_),
-            (error_bound_mode_ == "rel") ? error_bound_rel_ : error_bound_abs_
-        };
-
-        std::map<std::string, fz::Stage*> ptrs;
-        for(size_t i = 0; i < stages_.size(); i++) {
-            std::string sid = "s" + std::to_string(i);
-            auto* kind = stage_kinds_.find(stages_[i]);
-            if(!kind) throw std::runtime_error("Unknown stage type: " + stages_[i]);
-            auto* stage = kind->add_stage(stages_[i], sid, ctx);
-            const auto indices_key = kind->outlier_indices_key(stages_[i]);
-            if(!indices_key.empty())
-                state_.outlier_stages.push_back({sid, {stage, indices_key}});
-            ptrs[sid] = stage;
-        }
-
-        for(const auto& c : connections) {
-            if(c.from == "__external__") {
-                // Bind the pipeline's raw input directly to this port, even
-                // though 'to' may also have other real connections (e.g.
-                // cdf97_outlier_correct). Port position follows the same
-                // connection-order convention as every other wiring string
-                // here -- list "sN <- __external__" before any "sN <- sM"
-                // entry that should land on a later port of the same stage.
-                state_.ptr->bindExternalInput(ptrs.at(c.to));
-                continue;
-            }
-            if(c.port.empty())
-                state_.ptr->connect(ptrs.at(c.to), ptrs.at(c.from));
-            else
-                state_.ptr->connect(ptrs.at(c.to), ptrs.at(c.from), c.port);
-        }
-
-        if(!primary_source_.empty())
-            state_.ptr->setPrimarySource(ptrs.at(primary_source_));
-
-        // Build ordered list of terminal (unconnected) output ports for expose_stage_outputs.
-        // A port is terminal if no connection names it as the 'from' source.
-        // An empty port in a connection means the stage's first (index-0) port.
-        state_.terminal_outputs.clear();
-        if (expose_stage_outputs_) {
-            auto is_consumed = [&](const std::string& sid, const std::string& port, size_t idx) {
-                for(const auto& c : connections) {
-                    if (c.from != sid) continue;
-                    if (c.port == port)              return true;  // explicit match
-                    if (c.port.empty() && idx == 0)  return true;  // default = first port
-                }
-                return false;
-            };
-            for (size_t i = 0; i < stages_.size(); i++) {
-                std::string sid = "s" + std::to_string(i);
-                fz::Stage*  stage = ptrs[sid];
-                auto names = stage->getOutputNames();
-                if (names.empty()) names = {"output"};
-                for (size_t j = 0; j < names.size(); j++) {
-                    if (!is_consumed(sid, names[j], j)) {
-                        state_.terminal_outputs.push_back({
-                            "fzgpumodules:" + sid + ":output:" + names[j],
-                            fz_to_pressio_dtype(static_cast<fz::DataType>(stage->getOutputDataType(j)))
-                        });
-                    }
-                }
-            }
-        }
-
-        if (graph_mode_)
-            state_.ptr->enableGraphMode(true);
-
-        state_.ptr->finalize();
-        maybe_capture_graph(*state_.ptr, stream_, graph_mode_);
-    }
-
-    void build_from_config() {
-        fz::MemoryStrategy strategy = graph_mode_
-            ? fz::MemoryStrategy::PREALLOCATE
-            : MEMORY_STRATEGIES.at(memory_strategy_);
-
-        state_.outlier_stages.clear();
-        state_.ptr.reset(new fz::Pipeline(0, strategy, static_cast<float>(memory_multiplier_)));
-        configure_pipeline_base(*state_.ptr, nullptr, static_cast<int>(num_streams_), SPECIALIZATION_POLICIES.at(specialization_));
-
-        if (graph_mode_)
-            state_.ptr->enableGraphMode(true);
-
-        state_.ptr->loadConfig(config_file_);  // adds stages, wires, and finalizes
-        maybe_capture_graph(*state_.ptr, stream_, graph_mode_);
-    }
-
-    // =========================================================================
     // Archive compression / decompression
     // =========================================================================
 
@@ -739,16 +371,11 @@ private:
         // Config-file pipelines are sized by the TOML's input_size; don't rebuild
         // on data_size change. Manual pipelines must rebuild when data size changes.
         bool need_rebuild = state_.dirty || !state_.ptr ||
-                            (config_file_.empty() && data_size != state_.last_size);
+                            (config_.config_file.empty() && data_size != state_.last_size);
         last_rebuilt_ = need_rebuild;
         if(need_rebuild) {
             try {
-                if (!config_file_.empty())
-                    build_from_config();
-                else
-                    build_pipeline(data_size);
-                state_.dirty     = false;
-                state_.last_size = data_size;
+                state_ = build_encoder(config_, data_size, stream_);
             } catch(std::exception const& ex) {
                 return set_error(3, std::string("Pipeline construction failed: ") + ex.what());
             }
@@ -779,7 +406,7 @@ private:
         }
 
         last_stage_outputs_.clear();
-        if (expose_stage_outputs_ && !state_.terminal_outputs.empty()) {
+        if (config_.expose_stage_outputs && !state_.terminal_outputs.empty()) {
             std::vector<uint8_t> h_buf(output_size);
             cudaMemcpy(h_buf.data(), comp.data(), output_size, cudaMemcpyDeviceToHost);
             parse_stage_outputs(h_buf.data(), output_size);
@@ -839,7 +466,7 @@ private:
         }
         // Reconstruct from this payload, never from the encoder's most recent state.
         auto decoder = fz::Pipeline::fromHeader(archive.header.data(), archive.header.size(),
-            MEMORY_STRATEGIES.at(memory_strategy_), SPECIALIZATION_POLICIES.at(specialization_));
+            MEMORY_STRATEGIES.at(config_.memory_strategy), SPECIALIZATION_POLICIES.at(config_.specialization));
         auto restored = decoder->decompressOwned(
             {static_cast<uint8_t*>(compressed.data()) + archive.payload_offset, archive.payload_size}, stream_);
         if(restored.bytes() != archive.output_size)
@@ -853,26 +480,6 @@ private:
         state_.outlier_stages.clear();
         state_.terminal_outputs.clear();
         return 0;
-    }
-
-    // =========================================================================
-    // Dispatch helpers: call f(handler, sid, token) for each stage
-    // =========================================================================
-
-    template<typename F>
-    void for_each_stage(F&& f) const {
-        for(size_t i = 0; i < stages_.size(); i++) {
-            std::string sid = "s" + std::to_string(i);
-            if(const auto* kind = stage_kinds_.find(stages_[i])) f(*kind, sid, stages_[i]);
-        }
-    }
-
-    template<typename F>
-    void for_each_stage(F&& f) {
-        for(size_t i = 0; i < stages_.size(); i++) {
-            std::string sid = "s" + std::to_string(i);
-            if(auto* kind = stage_kinds_.find(stages_[i])) f(*kind, sid, stages_[i]);
-        }
     }
 
     // =========================================================================
@@ -934,35 +541,7 @@ private:
     CudaStream    stream_;
     PipelineState state_;
 
-    StageRegistry stage_kinds_;
-
-    double      error_bound_abs_   = 1e-3;
-    double      error_bound_rel_   = 1e-3;
-    std::string error_bound_mode_  = "abs";
-
-    std::string memory_strategy_   = "minimal";
-    // double/int64_t (not float/int): libpressio's Python layer boxes every
-    // Python float as C++ double and every Python int as C++ int64_t, and
-    // pressio_options::get() requires an exact type match — no numeric
-    // coercion — so a narrower field here would silently never be set.
-    double      memory_multiplier_ = 3.0;
-    std::string specialization_            = "off";
-    std::vector<size_t> dims_      = {0, 1, 1};
-    int64_t     num_streams_       = 1;
-
-    std::vector<std::string> stages_        = {"lorenzo:float:uint16", "diff:uint16"};
-    std::vector<std::string> connections_   = {"s1 <- s0:codes"};
-    // "" = default (Pipeline::setPrimarySource() not called; the sole/
-    // first-discovered source is used). Set to a stage id ("s2") to pick a
-    // specific stage's inverse output as decompress()'s answer -- needed for
-    // pipelines with more than one source stage, e.g. the SPERR recipe
-    // (docs/libpressio_python.md) where "s2 <- __external__" alongside
-    // "s2 <- s1:codes" makes cdf97_outlier_correct a second source.
-    std::string               primary_source_ = "";
-    std::string              config_file_   = "";
-
-    bool    graph_mode_             = false;
-    bool    expose_stage_outputs_   = false;
+    Configuration config_;
 
     size_t  last_peak_memory_       = 0;
     int64_t last_execution_time_us_ = 0;
