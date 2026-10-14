@@ -38,7 +38,9 @@
 #include "stage_adm.h"
 #endif
 #include "stage_bitplane_rze.h"
+#if LIBPRESSIO_FZGM_HAS_SZX
 #include "stage_szx.h"
+#endif
 #if LIBPRESSIO_FZGM_HAS_SZP
 #include "stage_szp.h"
 #endif
@@ -47,9 +49,15 @@
 #include "stage_log_transform.h"
 #include "stage_ginterp.h"
 #include "stage_roibin_split.h"
+#if LIBPRESSIO_FZGM_HAS_CDF97
 #include "stage_cdf97.h"
+#endif
+#if LIBPRESSIO_FZGM_HAS_SPECK2D
 #include "stage_speck2d.h"
+#endif
+#if LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
 #include "stage_outlier_correct.h"
+#endif
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
@@ -218,7 +226,9 @@ public:
         v.push_back(std::make_unique<ADMStageKind>());
 #endif
         v.push_back(std::make_unique<BitplaneRZEStageKind>());
+#if LIBPRESSIO_FZGM_HAS_SZX
         v.push_back(std::make_unique<SZxStageKind>());
+#endif
 #if LIBPRESSIO_FZGM_HAS_SZP
         v.push_back(std::make_unique<SZpStageKind>());
 #endif
@@ -227,9 +237,15 @@ public:
         v.push_back(std::make_unique<LogTransformStageKind>());
         v.push_back(std::make_unique<GInterpStageKind>());
         v.push_back(std::make_unique<ROIBinSplitStageKind>());
+#if LIBPRESSIO_FZGM_HAS_CDF97
         v.push_back(std::make_unique<Cdf97StageKind>());
+#endif
+#if LIBPRESSIO_FZGM_HAS_SPECK2D
         v.push_back(std::make_unique<Speck2DStageKind>());
+#endif
+#if LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
         v.push_back(std::make_unique<Cdf97OutlierCorrectStageKind>());
+#endif
         return v;
     }
 
@@ -271,6 +287,20 @@ public:
         set(options, "fzgpumodules:memory_strategy",  map_keys(MEMORY_STRATEGIES));
         set(options, "fzgpumodules:error_bound_mode", map_keys(ERROR_BOUND_MODES));
         set(options, "fzgpumodules:specialization", map_keys(SPECIALIZATION_POLICIES));
+        std::vector<std::string> optional_stages;
+#if LIBPRESSIO_FZGM_HAS_SZX
+        optional_stages.emplace_back("szx");
+#endif
+#if LIBPRESSIO_FZGM_HAS_CDF97
+        optional_stages.emplace_back("cdf97");
+#endif
+#if LIBPRESSIO_FZGM_HAS_SPECK2D
+        optional_stages.emplace_back("speck2d");
+#endif
+#if LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
+        optional_stages.emplace_back("cdf97_outlier_correct");
+#endif
+        set(options, "fzgpumodules:optional_stages", optional_stages);
         set(options, "predictors:error_dependent",
             std::vector<std::string>{"fzgpumodules:stages", "fzgpumodules:connections"});
         set(options, "predictors:error_agnostic",
@@ -338,14 +368,14 @@ public:
             "Integer Lorenzo:   lorenzo:int8, lorenzo:int16, lorenzo:int32, lorenzo:int64.\n"
             "Tiled predictor:   tiled_lorenzo:int16, tiled_lorenzo:int32 (dimension-aware,\n"
             "                   separable Lorenzo; tile-major output for AdaptiveBitpack).\n"
-            "Fused lossy:       szx:float, szx:double"
-#if LIBPRESSIO_FZGM_HAS_SZP
-            ", szp:float, szp:double"
+#if LIBPRESSIO_FZGM_HAS_SZX
+            "Optional lossy:    szx:float, szx:double (abs/noa error only).\n"
 #endif
-            " (block-local,\n"
-            "                   abs/noa error only); adaptive_lorenzo:int16/32 (lossless,\n"
-            "                   1 in/3 out fwd); ginterp (cuSZ-Hi interpolation, 2-D/3-D only,\n"
-            "                   1 in/4 out fwd).\n"
+#if LIBPRESSIO_FZGM_HAS_SZP
+            "Legacy lossy:      szp:float, szp:double (abs/noa error only).\n"
+#endif
+            "Adaptive Lorenzo:  adaptive_lorenzo:int16/32 (lossless, 1 in/3 out fwd).\n"
+            "Interpolation:     ginterp (cuSZ-Hi interpolation, 2-D/3-D only, 1 in/4 out fwd).\n"
             "Transforms:        zigzag:int8/16/32/64, negabinary:int8/16/32/64"
 #if LIBPRESSIO_FZGM_HAS_ADM
             ", adm:uint16/uint32"
@@ -360,15 +390,16 @@ public:
             "Byte-level:        bitshuffle, gpulz, tupl, bitplane_rze (fixed uint16 input).\n"
             "Structural:        roibin_split:float/double (needs fzgpumodules:sN:peaks_file,\n"
             "                   1 in/3 out fwd).\n"
-            "SPERR:             cdf97:float/double (CDF 9/7 DWT, not itself lossy — pairs with\n"
-            "                   quantizer), speck2d (2-D bit-plane coder, no options),\n"
-            "                   cdf97_outlier_correct (sparse exact correction — GUARANTEES the\n"
-            "                   pointwise bound quantizing DWT coefficients alone does not; error\n"
-            "                   bound is read from the same pressio:abs/rel as everything else, so\n"
-            "                   it automatically matches a paired quantizer token; needs the raw\n"
-            "                   input bound directly — see fzgpumodules:connections and\n"
-            "                   fzgpumodules:primary_source below). Full recipe in\n"
-            "                   docs/libpressio_python.md.\n"
+#if LIBPRESSIO_FZGM_HAS_CDF97
+            "Optional transform: cdf97:float/double (CDF 9/7 DWT; coefficient-domain quantization).\n"
+#endif
+#if LIBPRESSIO_FZGM_HAS_SPECK2D
+            "Optional coder:    speck2d (2-D bit-plane coder).\n"
+#endif
+#if LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
+            "Optional correction: cdf97_outlier_correct (sparse correction against raw input;\n"
+            "                   requires an external input binding and matching bound).\n"
+#endif
             "The stages marked 'N in/M out fwd' above have a port count that swaps with\n"
             "direction (M in/N out on decompress) — Pipeline::buildInverseDAG() reconciles\n"
             "this transparently, nothing special to configure.\n"
@@ -382,7 +413,7 @@ public:
             "'__external__' binds the pipeline's raw input directly to sN's next input port "
             "(Pipeline::bindExternalInput()) instead of another stage's output — e.g. "
             "'s2 <- __external__' — for a stage that needs the untouched original input on one "
-            "port while another port connects normally (cdf97_outlier_correct's shape). See "
+            "port while another port connects normally. See "
             "fzgpumodules:primary_source when this creates more than one source stage.");
         set(options, "fzgpumodules:primary_source",
             "Stage id (e.g. 's2') whose inverse output decompress() returns, for pipelines with "

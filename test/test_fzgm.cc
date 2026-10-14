@@ -617,7 +617,9 @@ TEST_F(FzgpuModulesTest, NewStageTokensCompileCheck) {
         {{"adm:uint16"}, {}}, {{"adm:uint32"}, {}},
 #endif
         {{"huffman:uint8"}, {}}, {{"huffman:uint16"}, {}}, {{"huffman:uint32"}, {}},
+#if LIBPRESSIO_FZGM_HAS_SZX
         {{"szx:float"}, {}}, {{"szx:double"}, {}},
+#endif
 #if LIBPRESSIO_FZGM_HAS_SZP
         {{"szp:float"}, {}}, {{"szp:double"}, {}},
 #endif
@@ -1344,6 +1346,9 @@ TEST_F(FzgpuModulesTest, AdmOverflowRejectsCleanly) {
 }
 
 TEST_F(FzgpuModulesTest, SZxStandaloneAbs) {
+#if !LIBPRESSIO_FZGM_HAS_SZX
+    GTEST_SKIP() << "SZx is absent from the installed FZGPUModules public API";
+#endif
     const double eb = 1e-3;
     pressio_options opts;
     opts.set("pressio:abs", eb);
@@ -1501,6 +1506,18 @@ TEST_F(FzgpuModulesTest, UnavailableLegacyStagesRejectCleanly) {
 #if !LIBPRESSIO_FZGM_HAS_SZP
     tokens.push_back("szp:float");
 #endif
+#if !LIBPRESSIO_FZGM_HAS_SZX
+    tokens.push_back("szx:float");
+#endif
+#if !LIBPRESSIO_FZGM_HAS_CDF97
+    tokens.push_back("cdf97:float");
+#endif
+#if !LIBPRESSIO_FZGM_HAS_SPECK2D
+    tokens.push_back("speck2d");
+#endif
+#if !LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
+    tokens.push_back("cdf97_outlier_correct");
+#endif
     for (const auto& token : tokens) {
         SCOPED_TRACE(token);
         auto compressor = lib.get_compressor("fzgpumodules");
@@ -1511,5 +1528,29 @@ TEST_F(FzgpuModulesTest, UnavailableLegacyStagesRejectCleanly) {
         ASSERT_EQ(compressor->set_options(opts), 0);
         pressio_data compressed = pressio_data::empty(pressio_byte_dtype, {});
         EXPECT_NE(compressor->compress(&input, &compressed), 0);
+    }
+}
+
+TEST_F(FzgpuModulesTest, OptionalStagesMatchInstalledPublicAPI) {
+    auto compressor = lib.get_compressor("fzgpumodules");
+    ASSERT_TRUE(!!compressor);
+    std::vector<std::string> available;
+    ASSERT_EQ(compressor->get_configuration().get(
+        "fzgpumodules:optional_stages", &available), pressio_options_key_set);
+    std::string documentation;
+    ASSERT_EQ(compressor->get_documentation().get(
+        "fzgpumodules:stages", &documentation), pressio_options_key_set);
+    const std::vector<std::pair<std::string, bool>> expected = {
+        {"szx", LIBPRESSIO_FZGM_HAS_SZX},
+        {"cdf97", LIBPRESSIO_FZGM_HAS_CDF97},
+        {"speck2d", LIBPRESSIO_FZGM_HAS_SPECK2D},
+        {"cdf97_outlier_correct", LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT},
+    };
+    for (const auto& [name, present] : expected) {
+        SCOPED_TRACE(name);
+        EXPECT_EQ(std::find(available.begin(), available.end(), name) != available.end(), present);
+        // Distinguish CDF97 itself from the correction token containing its name.
+        const std::string token = name == "cdf97" ? "cdf97:float" : name;
+        EXPECT_EQ(documentation.find(token) != std::string::npos, present);
     }
 }

@@ -398,6 +398,10 @@ if(LIBPRESSIO_HAS_FZGPUMODULES)
   unset(LIBPRESSIO_FZGM_PUBLIC_API_USABLE CACHE)
   unset(LIBPRESSIO_FZGM_HAS_ADM CACHE)
   unset(LIBPRESSIO_FZGM_HAS_SZP CACHE)
+  unset(LIBPRESSIO_FZGM_HAS_CDF97 CACHE)
+  unset(LIBPRESSIO_FZGM_HAS_SPECK2D CACHE)
+  unset(LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT CACHE)
+  unset(LIBPRESSIO_FZGM_HAS_SZX CACHE)
   check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::Pipeline* p = nullptr; (void)p; }"
     LIBPRESSIO_FZGM_PUBLIC_API_USABLE)
   if(NOT LIBPRESSIO_FZGM_PUBLIC_API_USABLE)
@@ -407,10 +411,22 @@ if(LIBPRESSIO_HAS_FZGPUMODULES)
     LIBPRESSIO_FZGM_HAS_ADM)
   check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::SZpStage<float>* p = nullptr; (void)p; }"
     LIBPRESSIO_FZGM_HAS_SZP)
+  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::Cdf97Stage<float>* p = nullptr; (void)p; }"
+    LIBPRESSIO_FZGM_HAS_CDF97)
+  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::Speck2DStage* p = nullptr; (void)p; }"
+    LIBPRESSIO_FZGM_HAS_SPECK2D)
+  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::Cdf97OutlierCorrectStage* p = nullptr; (void)p; }"
+    LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT)
+  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::SZxStage<float>* p = nullptr; (void)p; }"
+    LIBPRESSIO_FZGM_HAS_SZX)
   cmake_pop_check_state()
   target_compile_definitions(libpressio PRIVATE
     LIBPRESSIO_FZGM_HAS_ADM=$<BOOL:${LIBPRESSIO_FZGM_HAS_ADM}>
-    LIBPRESSIO_FZGM_HAS_SZP=$<BOOL:${LIBPRESSIO_FZGM_HAS_SZP}>)
+    LIBPRESSIO_FZGM_HAS_SZP=$<BOOL:${LIBPRESSIO_FZGM_HAS_SZP}>
+    LIBPRESSIO_FZGM_HAS_CDF97=$<BOOL:${LIBPRESSIO_FZGM_HAS_CDF97}>
+    LIBPRESSIO_FZGM_HAS_SPECK2D=$<BOOL:${LIBPRESSIO_FZGM_HAS_SPECK2D}>
+    LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT=$<BOOL:${LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT}>
+    LIBPRESSIO_FZGM_HAS_SZX=$<BOOL:${LIBPRESSIO_FZGM_HAS_SZX}>)
   set(LIBPRESSIO_COMPRESSORS "${LIBPRESSIO_COMPRESSORS} fzgpumodules")
   libpressio_plugin_file(/compressors/fzgpumodules/fzgpumodules.cc)
   target_link_libraries(libpressio PRIVATE FZGMOD::fzgmod)
