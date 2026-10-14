@@ -19,7 +19,7 @@ struct HuffmanParams {
     bool operator!=(const HuffmanParams& o) const { return !(*this == o); }
 };
 
-class HuffmanStageKind : public StageKind {
+class HuffmanStageKind : public CloneableStageKind<HuffmanStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "huffman"; }
 

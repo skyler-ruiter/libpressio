@@ -21,7 +21,7 @@ struct AdaptiveLorenzoParams {
 // needed, unlike stages whose port count depends on a *config* setter (see
 // GPULZ's split_mode, which does need Config-at-construction support the
 // engine doesn't have).
-class AdaptiveLorenzoStageKind : public StageKind {
+class AdaptiveLorenzoStageKind : public CloneableStageKind<AdaptiveLorenzoStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "adaptive_lorenzo"; }
 

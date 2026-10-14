@@ -9,7 +9,7 @@ struct SZpParams {
     bool operator!=(const SZpParams& o) const { return !(*this == o); }
 };
 
-class SZpStageKind : public StageKind {
+class SZpStageKind : public CloneableStageKind<SZpStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "szp"; }
 

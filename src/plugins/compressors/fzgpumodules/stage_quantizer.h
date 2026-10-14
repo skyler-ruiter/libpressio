@@ -33,7 +33,7 @@ struct QuantizerParams {
     bool operator!=(const QuantizerParams& o) const { return !(*this == o); }
 };
 
-class QuantizerStageKind : public StageKind {
+class QuantizerStageKind : public CloneableStageKind<QuantizerStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "quantizer"; }
 

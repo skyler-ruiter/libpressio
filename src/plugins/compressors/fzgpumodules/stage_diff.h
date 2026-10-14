@@ -3,7 +3,7 @@
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
-class DiffStageKind : public StageKind {
+class DiffStageKind : public CloneableStageKind<DiffStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "diff"; }
 

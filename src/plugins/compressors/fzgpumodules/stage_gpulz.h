@@ -22,7 +22,7 @@ struct GPULZParams {
     bool operator!=(const GPULZParams& o) const { return !(*this == o); }
 };
 
-class GPULZStageKind : public StageKind {
+class GPULZStageKind : public CloneableStageKind<GPULZStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "gpulz"; }
 

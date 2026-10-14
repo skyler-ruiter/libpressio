@@ -12,7 +12,7 @@ struct RREParams {
     bool operator!=(const RREParams& o) const { return !(*this == o); }
 };
 
-class RREStageKind : public StageKind {
+class RREStageKind : public CloneableStageKind<RREStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "rre"; }
 

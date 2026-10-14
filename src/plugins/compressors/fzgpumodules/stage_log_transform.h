@@ -15,7 +15,7 @@ struct LogTransformParams {
 // Forward: 1 input -> 4 outputs. Inverse: 4 inputs -> 1 output. Direction
 // swap handled transparently by Pipeline::buildInverseDAG() — no plugin-side
 // handling needed (confirmed empirically against AdaptiveLorenzoStage).
-class LogTransformStageKind : public StageKind {
+class LogTransformStageKind : public CloneableStageKind<LogTransformStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "log_transform"; }
 

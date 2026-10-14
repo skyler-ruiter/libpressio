@@ -3,7 +3,7 @@
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
-class RLEStageKind : public StageKind {
+class RLEStageKind : public CloneableStageKind<RLEStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "rle"; }
 

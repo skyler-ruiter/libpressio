@@ -12,7 +12,7 @@ struct RAREParams {
     bool operator!=(const RAREParams& o) const { return !(*this == o); }
 };
 
-class RAREStageKind : public StageKind {
+class RAREStageKind : public CloneableStageKind<RAREStageKind> {
 public:
     bool matches(std::string_view kind) const override { return kind == "rare"; }
 
