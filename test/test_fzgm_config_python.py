@@ -87,6 +87,19 @@ class ConfigurationTests(unittest.TestCase):
         self.comp.encode(self.x)
         self.assertTrue(self.comp.get_metrics()["fzgpumodules:rebuilt"])
 
+    def test_failed_pipeline_build_can_retry_and_recover(self):
+        self.comp.set_options({"fzgpumodules:connections": ["s1 <- s0:missing_port"]})
+        for _ in range(2):
+            with self.assertRaises(lp.PressioException):
+                self.comp.encode(self.x)
+        self.comp.set_options({"fzgpumodules:connections": self.before["fzgpumodules:connections"]})
+        encoded = self.comp.encode(self.x)
+        self.assertTrue(self.comp.get_metrics()["fzgpumodules:rebuilt"])
+        restored = self.comp.decode(encoded)
+        np.testing.assert_allclose(restored, self.x, atol=1e-3, rtol=0)
+        # Archives returned before the failed builds retain independent ownership.
+        np.testing.assert_allclose(self.comp.decode(self.baseline), self.x, atol=1e-3, rtol=0)
+
 
 class RuntimeFailureTests(unittest.TestCase):
     def test_no_gpu_reports_stream_error_without_breaking_configuration(self):

@@ -121,6 +121,10 @@ payload checksum. Array dimensions and dtype are validated against byte counts.
 ## Adapter layout
 
 - `fzgpumodules.cc`: libpressio options, pipeline lifecycle, execution, and metrics.
+- `configuration.h`: option values, validation, and stage parameter ownership. Updates
+  are parsed on a candidate and committed together after validation.
+- `pipeline_builder.h`: manual/TOML graph construction, named-port wiring, output
+  references, and graph capture. Returns a complete encoder before replacing live state.
 - `stage_registry.h`: SDK-gated handler catalog, token lookup, and parameter snapshots.
 - `stages/stage_kind.h`: common handler contract and value-copy support.
 - `stages/stage_*.h`: stage-specific options, documentation, and construction.
