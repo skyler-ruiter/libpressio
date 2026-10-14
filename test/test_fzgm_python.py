@@ -22,7 +22,6 @@ sys.path.insert(0, pressio_path)
 
 import numpy as np
 import libpressio as lp
-from fzgm_helper import Chain
 
 FAILED = 0
 PASSED = 0
@@ -35,6 +34,32 @@ def check(label, condition, detail=""):
     else:
         FAILED += 1
         print(f"FAILED: {label} {detail}")
+
+
+# The public builder emits the plugin's structural options without sharing lists.
+chain = (lp.FZGPUModulesChain()
+         .add("quantizer:float:uint32", linear_mode=True)
+         .add("lorenzo:int32", from_port="codes", block_size=32)
+         .configure(specialization="auto"))
+config = chain.early_config()
+check("public builder wiring", config == {
+    "fzgpumodules:stages": ["quantizer:float:uint32", "lorenzo:int32"],
+    "fzgpumodules:connections": ["s1 <- s0:codes"],
+    "fzgpumodules:s0:linear_mode": True,
+    "fzgpumodules:s1:block_size": 32,
+    "fzgpumodules:specialization": "auto",
+})
+config["fzgpumodules:stages"].clear()
+config["fzgpumodules:connections"].clear()
+check("builder configuration lists are independent",
+      len(chain.early_config()["fzgpumodules:stages"]) == 2 and
+      len(chain.early_config()["fzgpumodules:connections"]) == 1)
+try:
+    lp.FZGPUModulesChain().add("rze", from_port="codes")
+except ValueError:
+    check("builder rejects first-stage source port", True)
+else:
+    check("builder rejects first-stage source port", False)
 
 
 def make_data():
@@ -162,7 +187,7 @@ for policy in ("off", "auto"):
 
 # Confirm actual installation, including the lazily built inverse and option rebuild.
 for policy in ("off", "auto"):
-    comp = (Chain()
+    comp = (lp.FZGPUModulesChain()
         .add("quantizer:float:uint32", linear_mode=True)
         .add("lorenzo:int32", from_port="codes", block_size=32)
         .add("adaptive_bitpack:int32", block_size=32)
@@ -171,6 +196,14 @@ for policy in ("off", "auto"):
     check(f"integer Lorenzo block_size {policy} readback",
           comp.get_options()["fzgpumodules:s1:block_size"] == 32)
     encoded = comp.encode(partial)
+    fresh_decoder = lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})
+    try:
+        fresh_decoder.decode(encoded, np.empty_like(partial))
+    except lp.PressioException as exc:
+        check(f"{policy} fresh decoder reports pipeline requirement",
+              "prior compress call" in str(exc), str(exc))
+    else:
+        check(f"{policy} fresh decoder reports pipeline requirement", False)
     metrics = comp.get_metrics()
     check(f"{policy} forward specialization installed",
           metrics["fzgpumodules:specialization_forward_groups"] == (1 if policy == "auto" else 0))
