@@ -1,0 +1,6 @@
+#include <fzgpumodules.h>
+
+int main() {
+    @stage_type@* stage = nullptr;
+    (void)stage;
+}
