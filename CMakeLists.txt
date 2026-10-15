@@ -383,49 +383,8 @@ if(LIBPRESSIO_HAS_FZGPUMODULES)
   set(LIBPRESSIO_HAS_CUDA ON CACHE BOOL "Required by fzgpumodules" FORCE)
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)
-  find_package(FZGPUModules REQUIRED)
-  include(CheckCXXSourceCompiles)
-  include(CMakePushCheckState)
-  cmake_push_check_state(RESET)
-  get_target_property(_fzgm_public_includes FZGMOD::fzgmod INTERFACE_INCLUDE_DIRECTORIES)
-  if(TARGET FZGMOD::fzgmod_compile_settings)
-    get_target_property(_fzgm_shared_includes FZGMOD::fzgmod_compile_settings INTERFACE_INCLUDE_DIRECTORIES)
-    list(APPEND _fzgm_public_includes ${_fzgm_shared_includes})
-  endif()
-  set(CMAKE_REQUIRED_INCLUDES ${_fzgm_public_includes} ${CUDAToolkit_INCLUDE_DIRS})
-  set(CMAKE_REQUIRED_FLAGS "${CMAKE_CXX17_STANDARD_COMPILE_OPTION}")
-  # Recheck after SDK upgrades, including replacements at the same prefix.
-  unset(LIBPRESSIO_FZGM_PUBLIC_API_USABLE CACHE)
-  unset(LIBPRESSIO_FZGM_HAS_ADM CACHE)
-  unset(LIBPRESSIO_FZGM_HAS_SZP CACHE)
-  unset(LIBPRESSIO_FZGM_HAS_CDF97 CACHE)
-  unset(LIBPRESSIO_FZGM_HAS_SPECK2D CACHE)
-  unset(LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT CACHE)
-  unset(LIBPRESSIO_FZGM_HAS_SZX CACHE)
-  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::Pipeline* p = nullptr; (void)p; }"
-    LIBPRESSIO_FZGM_PUBLIC_API_USABLE)
-  if(NOT LIBPRESSIO_FZGM_PUBLIC_API_USABLE)
-    message(FATAL_ERROR "The installed FZGPUModules public header cannot be compiled")
-  endif()
-  unset(LIBPRESSIO_FZGM_HAS_ARCHIVE_RESTORE CACHE)
-  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { using P = decltype(fz::Pipeline::fromHeader(nullptr, 0)); return sizeof(P) == 0; }"
-    LIBPRESSIO_FZGM_HAS_ARCHIVE_RESTORE)
-  if(NOT LIBPRESSIO_FZGM_HAS_ARCHIVE_RESTORE)
-    message(FATAL_ERROR "Self-contained FZGM output requires an SDK with Pipeline::fromHeader; released v2.0.0 lacks this API")
-  endif()
-  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::ADMStage* p = nullptr; (void)p; }"
-    LIBPRESSIO_FZGM_HAS_ADM)
-  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::SZpStage<float>* p = nullptr; (void)p; }"
-    LIBPRESSIO_FZGM_HAS_SZP)
-  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::Cdf97Stage<float>* p = nullptr; (void)p; }"
-    LIBPRESSIO_FZGM_HAS_CDF97)
-  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::Speck2DStage* p = nullptr; (void)p; }"
-    LIBPRESSIO_FZGM_HAS_SPECK2D)
-  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::Cdf97OutlierCorrectStage* p = nullptr; (void)p; }"
-    LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT)
-  check_cxx_source_compiles("#include <fzgpumodules.h>\nint main() { fz::SZxStage<float>* p = nullptr; (void)p; }"
-    LIBPRESSIO_FZGM_HAS_SZX)
-  cmake_pop_check_state()
+  find_package(FZGPUModules 2.0.1 REQUIRED)
+  include(src/plugins/compressors/fzgpumodules/check_sdk.cmake)
   target_compile_definitions(libpressio PRIVATE
     LIBPRESSIO_FZGM_HAS_ADM=$<BOOL:${LIBPRESSIO_FZGM_HAS_ADM}>
     LIBPRESSIO_FZGM_HAS_SZP=$<BOOL:${LIBPRESSIO_FZGM_HAS_SZP}>
