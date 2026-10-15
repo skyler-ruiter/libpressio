@@ -45,8 +45,8 @@ struct PipelineOptions {
     std::string specialization = "off";
     std::vector<size_t> dims = {0, 1, 1};
     int64_t num_streams = 1;
-    std::vector<std::string> stages = {"lorenzo:float:uint16", "diff:uint16"};
-    std::vector<std::string> connections = {"s1 <- s0:codes"};
+    std::vector<std::string> stages;
+    std::vector<std::string> connections;
     // Empty selects the sole/first source; multi-source pipelines should set an id.
     std::string primary_source;
     std::string config_file;

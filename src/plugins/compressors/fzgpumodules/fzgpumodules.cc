@@ -124,7 +124,8 @@ public:
         set(options, "pressio:description",
             "FZGPUModules GPU compressor with user-composable pipeline stages.\n\n"
             "Configure the pipeline by setting `fzgpumodules:stages` (ordered list of stage tokens) "
-            "and `fzgpumodules:connections` (list of wiring strings). "
+            "and `fzgpumodules:connections` (list of wiring strings), or use a TOML config file. "
+            "Encoding requires an explicit pipeline; the default error bound is 1e-3. "
             "Set `fzgpumodules:dims` for multi-dimensional data (default: infer 1-D from input size). "
             "Use one GPU with the standard CUDA runtime primary context. Serialize calls across "
             "all FZGM instances; do not switch devices or reset the context while objects are alive. "
@@ -291,6 +292,9 @@ public:
 
     int compress_impl(const pressio_data* input, struct pressio_data* output) override {
         try {
+            if(config_.stages.empty() && config_.config_file.empty())
+                return set_error(1, "Encoding requires an explicit pipeline: set "
+                                    "fzgpumodules:stages or fzgpumodules:config_file");
             const auto& types = archive_dtypes();
             if(std::find(types.begin(), types.end(), input->dtype()) == types.end())
                 return set_error(1, "Unsupported data type for FZGpuModules compression");

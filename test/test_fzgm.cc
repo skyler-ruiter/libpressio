@@ -1464,6 +1464,10 @@ TEST_F(FzgpuModulesTest, FreshDecoderRestoresArchiveWithoutPriorCompression) {
     auto decoder = lib.get_compressor("fzgpumodules");
     ASSERT_TRUE(!!encoder);
     ASSERT_TRUE(!!decoder);
+    pressio_options options;
+    options.set("fzgpumodules:stages", std::vector<std::string>{"lorenzo:float:uint16", "diff:uint16"});
+    options.set("fzgpumodules:connections", std::vector<std::string>{"s1 <- s0:codes"});
+    ASSERT_EQ(encoder->set_options(options), 0) << encoder->error_msg();
     pressio_data compressed = pressio_data::empty(pressio_byte_dtype, {});
     ASSERT_EQ(encoder->compress(&input, &compressed), 0) << encoder->error_msg();
     auto output = pressio_data::empty(pressio_byte_dtype, {});

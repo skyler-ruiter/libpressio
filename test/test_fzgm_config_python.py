@@ -101,6 +101,31 @@ class ConfigurationTests(unittest.TestCase):
         np.testing.assert_allclose(self.comp.decode(self.baseline), self.x, atol=1e-3, rtol=0)
 
 
+class ExplicitPipelineTests(unittest.TestCase):
+    def test_encoding_requires_pipeline_and_can_recover(self):
+        comp = lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})
+        options = comp.get_options()
+        self.assertEqual(options["fzgpumodules:stages"], [])
+        self.assertEqual(options["fzgpumodules:connections"], [])
+        self.assertEqual(options["pressio:abs"], 1e-3)
+        x = np.sin(np.arange(131, dtype=np.float32))
+        with self.assertRaisesRegex(lp.PressioException, "explicit pipeline"):
+            comp.encode(x)
+        comp.set_options({"fzgpumodules:stages": ["lorenzo:float:uint16"]})
+        encoded = comp.encode(x)
+        comp.set_options({"fzgpumodules:stages": [], "fzgpumodules:connections": []})
+        with self.assertRaisesRegex(lp.PressioException, "explicit pipeline"):
+            comp.encode(x)
+        # Neither creating nor clearing an encoder configuration prevents archive decoding.
+        for dec in (comp, lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})):
+            np.testing.assert_allclose(dec.decode(encoded), x, atol=1e-3, rtol=0)
+
+    def test_empty_builder_requires_a_stage(self):
+        comp = lp.FZGPUModulesChain().compressor()
+        with self.assertRaisesRegex(lp.PressioException, "explicit pipeline"):
+            comp.encode(np.ones(32, dtype=np.float32))
+
+
 class RuntimeFailureTests(unittest.TestCase):
     def test_no_gpu_reports_stream_error_without_breaking_configuration(self):
         # Use a fresh process because CUDA caches device visibility after initialization.
@@ -109,7 +134,7 @@ import sys
 sys.path.insert(0, sys.argv[1])
 import libpressio as lp
 import numpy as np
-comp = lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})
+comp = lp.FZGPUModulesChain().add("bitshuffle").compressor()
 assert comp.get_options()["fzgpumodules:specialization"] == "off"
 for _ in range(2):
     try:
