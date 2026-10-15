@@ -97,7 +97,8 @@ np.save(sys.argv[3], comp.decode(Path(sys.argv[2]).read_bytes()))
         bad_shape = bytearray(data); bad_shape[40:48] = (2**64-1).to_bytes(8,"little")
         bad_header = bytearray(data); bad_header[((40+8*self.x.ndim+15)//16)*16+80] ^= 1
         bad_dtype = bytearray(data); bad_dtype[12:16] = (99).to_bytes(4,"little")
-        concat_data = decoder().encode(self.x).tobytes()
+        concat_data = (lp.FZGPUModulesChain().add("lorenzo:float:uint16")
+            .add("diff:uint16", from_port="codes").compressor().encode(self.x).tobytes())
         metadata_base = ((40+8*self.x.ndim+15)//16)*16
         count = int.from_bytes(concat_data[metadata_base+6:metadata_base+8], "little")
         self.assertGreater(count, 1)  # Quantizer outlier ports make a multi-output payload.
