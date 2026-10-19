@@ -657,15 +657,8 @@ class PressioCompressor(PressioObject, Codec):
         decompressed_lp = None
         cleanup_dec = True
         try:
-            if self._object_id == "fzgpumodules" and isinstance(buf, bytes):
-                compressed_lp = pressio.io_data_from_bytes(buf)
-            else:
-                compressed_lp = python_to_new_pressio_data(buf)
-            if out is None and self._object_id == "fzgpumodules":
-                # FZGM archives supply their own dtype and dimensions.
-                decompressed_lp = pressio.data_new_empty(pressio.byte_dtype, pressio.vector_uint64_t())
-            else:
-                decompressed_lp = python_to_new_pressio_data(out)
+            compressed_lp = python_to_new_pressio_data(buf)
+            decompressed_lp = python_to_new_pressio_data(out)
 
             rc = pressio.compressor_decompress(self._object, compressed_lp, decompressed_lp)
             if rc:
@@ -861,66 +854,3 @@ class PressioMetrics(PressioObject):
                 pressio.data_free(compressed_lp)
             if results_lp is not None:
                 pressio.options_free(results_lp)
-
-
-class FZGPUModulesChain:
-    """Build a linear pipeline for the optional FZGPUModules plugin.
-
-    Creating a compressor requires libpressio built with FZGPUModules support.
-    Encoded output includes pipeline metadata, dtype, and dimensions. A fresh
-    FZGPUModules compressor can decode it without reconstructing this chain.
-
-    Each add() call appends one stage, auto-numbers it sN, and wires it to
-    the previous stage's output (default port, or a named one via
-    from_port). Keyword args become that stage's "fzgpumodules:sN:<key>"
-    options.
-
-    >>> chain = FZGPUModulesChain().add("lorenzo:float:uint16", quant_radius=999)
-    >>> chain.add("rze", from_port="codes", chunk_size=8192).early_config()["fzgpumodules:connections"]
-    ['s1 <- s0:codes']
-    """
-
-    def __init__(self):
-        self._stages = []
-        self._connections = []
-        self._options = {}
-        self._top = {}
-
-    def add(self, token, from_port=None, **options):
-        sid = f"s{len(self._stages)}"
-        if self._stages:
-            prev = f"s{len(self._stages) - 1}"
-            src = f"{prev}:{from_port}" if from_port else prev
-            self._connections.append(f"{sid} <- {src}")
-        elif from_port is not None:
-            raise ValueError("from_port has no effect on the first stage (nothing precedes it)")
-        self._stages.append(token)
-        for key, value in options.items():
-            self._options[f"fzgpumodules:{sid}:{key}"] = value
-        return self
-
-    def configure(self, **top_level_options):
-        """Set top-level fzgpumodules:* options, e.g. specialization="auto", error_bound_mode="noa"."""
-        for key, value in top_level_options.items():
-            self._top[f"fzgpumodules:{key}"] = value
-        return self
-
-    def early_config(self):
-        cfg = {
-            "fzgpumodules:stages": list(self._stages),
-            "fzgpumodules:connections": list(self._connections),
-        }
-        cfg.update(self._top)
-        cfg.update(self._options)
-        return cfg
-
-    def compressor(self, eb=None, metric="size"):
-        """Build a ready-to-use PressioCompressor from the chain built so far."""
-        compressor_config = {"pressio:metric": metric}
-        if eb is not None:
-            compressor_config["pressio:abs"] = eb
-        return PressioCompressor.from_config({
-            "compressor_id": "fzgpumodules",
-            "early_config": self.early_config(),
-            "compressor_config": compressor_config,
-        })

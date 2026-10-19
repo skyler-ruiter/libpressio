@@ -19,34 +19,16 @@
 #include "stages/stage_gpulz.h"
 #include "stages/stage_tupl.h"
 #include "stages/stage_ans.h"
-#if LIBPRESSIO_FZGM_HAS_ADM
-#include "stages/stage_adm.h"
-#endif
 #include "stages/stage_bitplane_rze.h"
-#if LIBPRESSIO_FZGM_HAS_SZX
-#include "stages/stage_szx.h"
-#endif
-#if LIBPRESSIO_FZGM_HAS_SZP
-#include "stages/stage_szp.h"
-#endif
 #include "stages/stage_huffman.h"
 #include "stages/stage_adaptive_lorenzo.h"
 #include "stages/stage_log_transform.h"
 #include "stages/stage_ginterp.h"
 #include "stages/stage_roibin_split.h"
-#if LIBPRESSIO_FZGM_HAS_CDF97
-#include "stages/stage_cdf97.h"
-#endif
-#if LIBPRESSIO_FZGM_HAS_SPECK2D
-#include "stages/stage_speck2d.h"
-#endif
-#if LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
-#include "stages/stage_outlier_correct.h"
-#endif
 
 namespace libpressio { namespace fzgpumodules { namespace fzgpumodules_ns {
 
-// The catalog and SDK capability guards live here; the plugin uses token lookup.
+// The stable stage catalog lives here; the plugin uses token lookup.
 class StageRegistry {
 public:
     StageRegistry() {
@@ -69,30 +51,12 @@ public:
         kinds_.push_back(std::make_unique<GPULZStageKind>());
         kinds_.push_back(std::make_unique<TUPLStageKind>());
         kinds_.push_back(std::make_unique<ANSStageKind>());
-#if LIBPRESSIO_FZGM_HAS_ADM
-        kinds_.push_back(std::make_unique<ADMStageKind>());
-#endif
         kinds_.push_back(std::make_unique<BitplaneRZEStageKind>());
-#if LIBPRESSIO_FZGM_HAS_SZX
-        kinds_.push_back(std::make_unique<SZxStageKind>());
-#endif
-#if LIBPRESSIO_FZGM_HAS_SZP
-        kinds_.push_back(std::make_unique<SZpStageKind>());
-#endif
         kinds_.push_back(std::make_unique<HuffmanStageKind>());
         kinds_.push_back(std::make_unique<AdaptiveLorenzoStageKind>());
         kinds_.push_back(std::make_unique<LogTransformStageKind>());
         kinds_.push_back(std::make_unique<GInterpStageKind>());
         kinds_.push_back(std::make_unique<ROIBinSplitStageKind>());
-#if LIBPRESSIO_FZGM_HAS_CDF97
-        kinds_.push_back(std::make_unique<Cdf97StageKind>());
-#endif
-#if LIBPRESSIO_FZGM_HAS_SPECK2D
-        kinds_.push_back(std::make_unique<Speck2DStageKind>());
-#endif
-#if LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
-        kinds_.push_back(std::make_unique<Cdf97OutlierCorrectStageKind>());
-#endif
     }
 
     StageRegistry(const StageRegistry& other) {

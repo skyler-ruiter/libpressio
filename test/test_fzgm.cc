@@ -21,7 +21,7 @@
 //   SingleStageRle, SingleStageLorenzo
 // Regression:
 //   RepeatedCompress, TiledLorenzoNoExplicitDims, HuffmanBklenTooLargeRejectsCleanly,
-//   HuffmanBklenModerateOverflowRejectsCleanly, AdmOverflowRejectsCleanly
+//   HuffmanBklenModerateOverflowRejectsCleanly
 // Validation:
 //   InvalidErrorBoundMode, InvalidMemoryStrategy
 // Specialization:
@@ -33,7 +33,6 @@
 // New stage types:
 //   TiledLorenzoLossless, AdaptiveBitpackPipeline, RREPipeline, CLOGPipeline,
 //   GPULZPipeline, TUPLPipeline, BitplaneRZEPipeline, ANSPipeline,
-//   AdmUint16BoundedInput, AdmUint32BoundedInput, SZxStandaloneAbs, SZpStandaloneAbs,
 //   HuffmanWithZigzagCodes
 // Direction-dependent port count stages:
 //   AdaptiveLorenzoLossless, LogTransformStage, GInterpPipeline, ROIBinSplitPipeline
@@ -586,16 +585,7 @@ TEST_F(FzgpuModulesTest, NewStageTokensCompileCheck) {
         {{"adaptive_bitpack:int32"},  {}},
         {{"rre"},  {}}, {{"rare"}, {}}, {{"raze"}, {}}, {{"clog"}, {}}, {{"hclog"}, {}},
         {{"gpulz"}, {}}, {{"tupl"}, {}}, {{"bitplane_rze"}, {}}, {{"ans"}, {}},
-#if LIBPRESSIO_FZGM_HAS_ADM
-        {{"adm:uint16"}, {}}, {{"adm:uint32"}, {}},
-#endif
         {{"huffman:uint8"}, {}}, {{"huffman:uint16"}, {}}, {{"huffman:uint32"}, {}},
-#if LIBPRESSIO_FZGM_HAS_SZX
-        {{"szx:float"}, {}}, {{"szx:double"}, {}},
-#endif
-#if LIBPRESSIO_FZGM_HAS_SZP
-        {{"szp:float"}, {}}, {{"szp:double"}, {}},
-#endif
         {{"adaptive_lorenzo:int16"}, {}}, {{"adaptive_lorenzo:int32"}, {}},
         {{"log_transform"}, {}},
         {{"ginterp"}, {}},
@@ -1234,118 +1224,6 @@ TEST_F(FzgpuModulesTest, HuffmanBklenModerateOverflowRejectsCleanly) {
         << "bklen=65534 should have been rejected on this device";
 }
 
-TEST_F(FzgpuModulesTest, AdmUint16BoundedInput) {
-#if !LIBPRESSIO_FZGM_HAS_ADM
-    GTEST_SKIP() << "Stage is absent from the installed FZGPUModules public API";
-#endif
-    pressio_data data = pressio_data::owning(pressio_uint16_dtype, {256, 256});
-    auto* p = static_cast<uint16_t*>(data.data());
-    for (size_t i = 0; i < data.num_elements(); ++i)
-        p[i] = static_cast<uint16_t>(10000 + (i % 100) - 50);
-
-    pressio_compressor comp = lib.get_compressor("fzgpumodules");
-    ASSERT_TRUE(!!comp);
-    pressio_options opts;
-    opts.set("fzgpumodules:stages",      std::vector<std::string>{"adm:uint16"});
-    opts.set("fzgpumodules:connections", std::vector<std::string>{});
-    ASSERT_EQ(comp->set_options(opts), 0) << comp->error_msg();
-
-    pressio_data compressed = pressio_data::empty(pressio_byte_dtype, {});
-    ASSERT_EQ(comp->compress(&data, &compressed), 0) << comp->error_msg();
-    pressio_data output = pressio_data::owning(pressio_uint16_dtype, data.dimensions());
-    ASSERT_EQ(comp->decompress(&compressed, &output), 0) << comp->error_msg();
-
-    const auto* orig  = static_cast<const uint16_t*>(data.data());
-    const auto* recon = static_cast<const uint16_t*>(output.data());
-    bool exact = true;
-    for (size_t i = 0; i < data.num_elements() && exact; ++i)
-        if (orig[i] != recon[i]) exact = false;
-    EXPECT_TRUE(exact) << "adm:uint16 round-trip is not exact";
-}
-
-TEST_F(FzgpuModulesTest, AdmUint32BoundedInput) {
-#if !LIBPRESSIO_FZGM_HAS_ADM
-    GTEST_SKIP() << "Stage is absent from the installed FZGPUModules public API";
-#endif
-    pressio_data data = pressio_data::owning(pressio_int32_dtype, {256, 256});
-    auto* p = static_cast<int32_t*>(data.data());
-    for (size_t i = 0; i < data.num_elements(); ++i)
-        p[i] = static_cast<int32_t>(10000 + (i % 100) - 50);
-
-    pressio_compressor comp = lib.get_compressor("fzgpumodules");
-    ASSERT_TRUE(!!comp);
-    pressio_options opts;
-    opts.set("fzgpumodules:stages",      std::vector<std::string>{"adm:uint32"});
-    opts.set("fzgpumodules:connections", std::vector<std::string>{});
-    ASSERT_EQ(comp->set_options(opts), 0) << comp->error_msg();
-
-    pressio_data compressed = pressio_data::empty(pressio_byte_dtype, {});
-    ASSERT_EQ(comp->compress(&data, &compressed), 0) << comp->error_msg();
-    pressio_data output = pressio_data::owning(pressio_int32_dtype, data.dimensions());
-    ASSERT_EQ(comp->decompress(&compressed, &output), 0) << comp->error_msg();
-
-    const auto* orig  = static_cast<const int32_t*>(data.data());
-    const auto* recon = static_cast<const int32_t*>(output.data());
-    bool exact = true;
-    for (size_t i = 0; i < data.num_elements() && exact; ++i)
-        if (orig[i] != recon[i]) exact = false;
-    EXPECT_TRUE(exact) << "adm:uint32 round-trip is not exact";
-}
-
-// Regression: ADM's overflow guard used to be compiled out in Release builds
-// (#ifndef NDEBUG), so out-of-spec input (diffs exceeding algorithm capacity)
-// silently corrupted device memory instead of raising. Confirms it now raises.
-TEST_F(FzgpuModulesTest, AdmOverflowRejectsCleanly) {
-#if !LIBPRESSIO_FZGM_HAS_ADM
-    GTEST_SKIP() << "Stage is absent from the installed FZGPUModules public API";
-#endif
-    pressio_data data = pressio_data::owning(pressio_uint16_dtype, {256, 256});
-    auto* p = static_cast<uint16_t*>(data.data());
-    // Alternating extremes: adjacent-element diffs from the block center are
-    // near the full uint16 range, far beyond ADM's bounded-diff assumption.
-    for (size_t i = 0; i < data.num_elements(); ++i)
-        p[i] = (i % 2 == 0) ? uint16_t(0) : uint16_t(65535);
-
-    pressio_compressor comp = lib.get_compressor("fzgpumodules");
-    ASSERT_TRUE(!!comp);
-    pressio_options opts;
-    opts.set("fzgpumodules:stages",      std::vector<std::string>{"adm:uint16"});
-    opts.set("fzgpumodules:connections", std::vector<std::string>{});
-    ASSERT_EQ(comp->set_options(opts), 0) << comp->error_msg();
-
-    pressio_data compressed = pressio_data::empty(pressio_byte_dtype, {});
-    EXPECT_NE(comp->compress(&data, &compressed), 0)
-        << "out-of-spec ADM input should have been rejected, not silently corrupted";
-}
-
-TEST_F(FzgpuModulesTest, SZxStandaloneAbs) {
-#if !LIBPRESSIO_FZGM_HAS_SZX
-    GTEST_SKIP() << "SZx is absent from the installed FZGPUModules public API";
-#endif
-    const double eb = 1e-3;
-    pressio_options opts;
-    opts.set("pressio:abs", eb);
-    opts.set("fzgpumodules:stages",      std::vector<std::string>{"szx:float"});
-    opts.set("fzgpumodules:connections", std::vector<std::string>{});
-    auto [max_err, cr] = roundtrip(lib, opts, input);
-    EXPECT_GT(cr, 1.0);
-    EXPECT_LE(max_err, eb + 1e-5);
-}
-
-TEST_F(FzgpuModulesTest, SZpStandaloneAbs) {
-#if !LIBPRESSIO_FZGM_HAS_SZP
-    GTEST_SKIP() << "Stage is absent from the installed FZGPUModules public API";
-#endif
-    const double eb = 1e-3;
-    pressio_options opts;
-    opts.set("pressio:abs", eb);
-    opts.set("fzgpumodules:stages",      std::vector<std::string>{"szp:float"});
-    opts.set("fzgpumodules:connections", std::vector<std::string>{});
-    auto [max_err, cr] = roundtrip(lib, opts, input);
-    EXPECT_GT(cr, 1.0);
-    EXPECT_LE(max_err, eb + 1e-5);
-}
-
 // ── Direction-dependent port count stages ────────────────────────────────────────
 //
 // These stages' getNumOutputs()/getNumInputs() swap with direction (more ports
@@ -1481,26 +1359,11 @@ TEST_F(FzgpuModulesTest, FreshDecoderRestoresArchiveWithoutPriorCompression) {
         ASSERT_LE(std::abs(in_values[i]-out_values[i]), 1e-3 + 1e-6) << i;
 }
 
-TEST_F(FzgpuModulesTest, UnavailableLegacyStagesRejectCleanly) {
-    std::vector<std::string> tokens;
-#if !LIBPRESSIO_FZGM_HAS_ADM
-    tokens.push_back("adm:uint16");
-#endif
-#if !LIBPRESSIO_FZGM_HAS_SZP
-    tokens.push_back("szp:float");
-#endif
-#if !LIBPRESSIO_FZGM_HAS_SZX
-    tokens.push_back("szx:float");
-#endif
-#if !LIBPRESSIO_FZGM_HAS_CDF97
-    tokens.push_back("cdf97:float");
-#endif
-#if !LIBPRESSIO_FZGM_HAS_SPECK2D
-    tokens.push_back("speck2d");
-#endif
-#if !LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
-    tokens.push_back("cdf97_outlier_correct");
-#endif
+TEST_F(FzgpuModulesTest, UnsupportedStagesRejectCleanly) {
+    const std::vector<std::string> tokens = {
+        "adm:uint16", "adm:uint32", "szp:float", "szx:float",
+        "cdf97:float", "speck2d", "cdf97_outlier_correct",
+    };
     for (const auto& token : tokens) {
         SCOPED_TRACE(token);
         auto compressor = lib.get_compressor("fzgpumodules");
@@ -1510,32 +1373,23 @@ TEST_F(FzgpuModulesTest, UnavailableLegacyStagesRejectCleanly) {
         opts.set("fzgpumodules:connections", std::vector<std::string>{});
         ASSERT_EQ(compressor->set_options(opts), 0);
         pressio_data compressed = pressio_data::empty(pressio_byte_dtype, {});
-        EXPECT_NE(compressor->compress(&input, &compressed), 0);
+        ASSERT_NE(compressor->compress(&input, &compressed), 0);
+        EXPECT_NE(std::string(compressor->error_msg()).find("Unknown stage type: " + token),
+                  std::string::npos);
     }
 }
 
-TEST_F(FzgpuModulesTest, OptionalStagesMatchInstalledPublicAPI) {
+TEST_F(FzgpuModulesTest, StageDocumentationUsesStableCatalog) {
     auto compressor = lib.get_compressor("fzgpumodules");
     ASSERT_TRUE(!!compressor);
-    std::vector<std::string> available;
-    ASSERT_EQ(compressor->get_configuration().get(
-        "fzgpumodules:optional_stages", &available), pressio_options_key_set);
     std::string documentation;
     ASSERT_EQ(compressor->get_documentation().get(
         "fzgpumodules:stages", &documentation), pressio_options_key_set);
-    const std::vector<std::pair<std::string, bool>> expected = {
-        {"szx", LIBPRESSIO_FZGM_HAS_SZX},
-        {"cdf97", LIBPRESSIO_FZGM_HAS_CDF97},
-        {"speck2d", LIBPRESSIO_FZGM_HAS_SPECK2D},
-        {"cdf97_outlier_correct", LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT},
-    };
-    for (const auto& [name, present] : expected) {
-        SCOPED_TRACE(name);
-        EXPECT_EQ(std::find(available.begin(), available.end(), name) != available.end(), present);
-        // Distinguish CDF97 itself from the correction token containing its name.
-        const std::string token = name == "cdf97" ? "cdf97:float" : name;
-        EXPECT_EQ(documentation.find(token) != std::string::npos, present);
+    for (const auto* token : {"adm:", "szp:", "szx:", "cdf97", "speck2d"}) {
+        SCOPED_TRACE(token);
+        EXPECT_EQ(documentation.find(token), std::string::npos);
     }
+    EXPECT_NE(documentation.find("ans"), std::string::npos);
 }
 
 TEST_F(FzgpuModulesTest, CloneHasIndependentPipelineAndOptions) {

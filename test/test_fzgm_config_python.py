@@ -7,17 +7,17 @@ import unittest
 binding_dir = sys.argv.pop(1)
 sys.path.insert(0, binding_dir)
 import libpressio as lp
+import libpressio_fzgpumodules as fzgm
 import numpy as np
 
 
 class ConfigurationTests(unittest.TestCase):
     def setUp(self):
-        self.comp = (lp.FZGPUModulesChain()
+        self.comp = (fzgm.Chain()
             .add("quantizer:float:uint32", linear_mode=True)
             .add("lorenzo:int32", from_port="codes", block_size=32)
             .add("adaptive_bitpack:int32", block_size=32)
-            .configure(memory_strategy="preallocate", specialization="off")
-            .compressor(eb=1e-3))
+            .configure(eb=1e-3, memory_strategy="preallocate", specialization="off"))
         self.x = np.sin(np.arange(131, dtype=np.float32))
         self.baseline = self.comp.encode(self.x)
         self.before = self.comp.get_options()
@@ -117,11 +117,11 @@ class ExplicitPipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(lp.PressioException, "explicit pipeline"):
             comp.encode(x)
         # Neither creating nor clearing an encoder configuration prevents archive decoding.
-        for dec in (comp, lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})):
-            np.testing.assert_allclose(dec.decode(encoded), x, atol=1e-3, rtol=0)
+        for dec in (comp, fzgm.Compressor.from_config({"compressor_id": "fzgpumodules"})):
+            np.testing.assert_allclose(dec.decode(encoded, np.empty_like(x)), x, atol=1e-3, rtol=0)
 
     def test_empty_builder_requires_a_stage(self):
-        comp = lp.FZGPUModulesChain().compressor()
+        comp = fzgm.Chain().configure()
         with self.assertRaisesRegex(lp.PressioException, "explicit pipeline"):
             comp.encode(np.ones(32, dtype=np.float32))
 
@@ -133,8 +133,9 @@ class RuntimeFailureTests(unittest.TestCase):
 import sys
 sys.path.insert(0, sys.argv[1])
 import libpressio as lp
+import libpressio_fzgpumodules as fzgm
 import numpy as np
-comp = lp.FZGPUModulesChain().add("bitshuffle").compressor()
+comp = fzgm.Chain().add("bitshuffle").configure()
 assert comp.get_options()["fzgpumodules:specialization"] == "off"
 for _ in range(2):
     try:

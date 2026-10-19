@@ -384,14 +384,6 @@ if(LIBPRESSIO_HAS_FZGPUMODULES)
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)
   find_package(FZGPUModules 2.0.1 REQUIRED)
-  include(src/plugins/compressors/fzgpumodules/check_sdk.cmake)
-  target_compile_definitions(libpressio PRIVATE
-    LIBPRESSIO_FZGM_HAS_ADM=$<BOOL:${LIBPRESSIO_FZGM_HAS_ADM}>
-    LIBPRESSIO_FZGM_HAS_SZP=$<BOOL:${LIBPRESSIO_FZGM_HAS_SZP}>
-    LIBPRESSIO_FZGM_HAS_CDF97=$<BOOL:${LIBPRESSIO_FZGM_HAS_CDF97}>
-    LIBPRESSIO_FZGM_HAS_SPECK2D=$<BOOL:${LIBPRESSIO_FZGM_HAS_SPECK2D}>
-    LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT=$<BOOL:${LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT}>
-    LIBPRESSIO_FZGM_HAS_SZX=$<BOOL:${LIBPRESSIO_FZGM_HAS_SZX}>)
   set(LIBPRESSIO_COMPRESSORS "${LIBPRESSIO_COMPRESSORS} fzgpumodules")
   libpressio_plugin_file(/compressors/fzgpumodules/fzgpumodules.cc)
   target_link_libraries(libpressio PRIVATE FZGMOD::fzgmod)

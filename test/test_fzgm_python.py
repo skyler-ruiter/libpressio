@@ -22,6 +22,7 @@ sys.path.insert(0, pressio_path)
 
 import numpy as np
 import libpressio as lp
+import libpressio_fzgpumodules as fzgm
 
 FAILED = 0
 PASSED = 0
@@ -36,26 +37,24 @@ def check(label, condition, detail=""):
         print(f"FAILED: {label} {detail}")
 
 
-# The public builder emits the plugin's structural options without sharing lists.
-chain = (lp.FZGPUModulesChain()
+# The builder returns the subclass and preserves independent compressor settings.
+chain = (fzgm.Chain()
          .add("quantizer:float:uint32", linear_mode=True)
-         .add("lorenzo:int32", from_port="codes", block_size=32)
-         .configure(specialization="auto"))
-config = chain.early_config()
-check("public builder wiring", config == {
-    "fzgpumodules:stages": ["quantizer:float:uint32", "lorenzo:int32"],
-    "fzgpumodules:connections": ["s1 <- s0:codes"],
-    "fzgpumodules:s0:linear_mode": True,
-    "fzgpumodules:s1:block_size": 32,
-    "fzgpumodules:specialization": "auto",
-})
-config["fzgpumodules:stages"].clear()
-config["fzgpumodules:connections"].clear()
-check("builder configuration lists are independent",
-      len(chain.early_config()["fzgpumodules:stages"]) == 2 and
-      len(chain.early_config()["fzgpumodules:connections"]) == 1)
+         .add("lorenzo:int32", from_port="codes", block_size=32))
+comp = chain.configure(eb=2e-3, specialization="auto")
+config = comp.get_options()
+check("public builder wiring",
+      config["fzgpumodules:connections"] == ["s1 <- s0:codes"] and
+      config["fzgpumodules:s0:linear_mode"] and
+      config["fzgpumodules:s1:block_size"] == 32 and
+      config["fzgpumodules:specialization"] == "auto" and
+      config["pressio:abs"] == 2e-3 and isinstance(comp, lp.PressioCompressor))
+chain.add("adaptive_bitpack:int32", block_size=32)
+check("builder compressors retain independent configurations",
+      len(comp.get_options()["fzgpumodules:stages"]) == 2 and
+      len(chain.configure().get_options()["fzgpumodules:stages"]) == 3)
 try:
-    lp.FZGPUModulesChain().add("rze", from_port="codes")
+    fzgm.Chain().add("rze", from_port="codes")
 except ValueError:
     check("builder rejects first-stage source port", True)
 else:
@@ -76,7 +75,7 @@ data = make_data()
 # anything the compression algorithm itself does.
 
 def check_scalar_readback(stage_token, key, value, label=None):
-    comp = lp.PressioCompressor.from_config({
+    comp = fzgm.Compressor.from_config({
         "compressor_id": "fzgpumodules",
         "early_config": {
             "fzgpumodules:stages": [stage_token],
@@ -97,7 +96,7 @@ check_scalar_readback("rze", "fzgpumodules:s0:word_size", 4)
 check_scalar_readback("bitpack:uint16", "fzgpumodules:s0:nbits", 8)
 check_scalar_readback("bitshuffle", "fzgpumodules:s0:element_width", 2)
 
-comp = lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})
+comp = fzgm.Compressor.from_config({"compressor_id": "fzgpumodules"})
 comp.set_options({"fzgpumodules:memory_multiplier": 5.0})
 comp.set_options({"fzgpumodules:num_streams": 2})
 opts = comp.get_options()
@@ -112,7 +111,7 @@ def roundtrip_ok(config, data, eb=1e-3):
     cfg = {"compressor_id": "fzgpumodules", "early_config": early,
            "compressor_config": {"pressio:abs": eb, "pressio:metric": "size",
                                   **config.get("compressor_config", {})}}
-    comp = lp.PressioCompressor.from_config(cfg)
+    comp = fzgm.Compressor.from_config(cfg)
     d = np.asarray(comp.decode(comp.encode(data), data.copy()))
     max_err = float(np.abs(data - d).max())
     return max_err <= eb + 1e-6, max_err, comp.get_metrics()["size:compression_ratio"]
@@ -137,38 +136,22 @@ ok, max_err, ratio = roundtrip_ok({
 check("rze chunk_size takes effect (ratio differs from default)", ok and ratio != 9.781492537313433,
       f"ratio={ratio}")
 
-# ── New stages from this session: smoke-test that the Python token strings
-# work end to end (not exhaustive -- see test_fzgm.cc for full coverage).
-
-available_optional_stages = lp.PressioCompressor.from_config(
-    {"compressor_id": "fzgpumodules"}).get_configuration()["fzgpumodules:optional_stages"]
-
-for token, dtype, needs_dims in [
-    ("szx:float", np.float32, False),
-    ("adaptive_bitpack:int32", np.int32, False),
-]:
-    if token.split(":")[0] == "szx" and "szx" not in available_optional_stages:
-        print("SKIPPED: szx:float round-trip (absent from installed SDK public API)")
-        continue
-    if dtype == np.int32:
-        rng = np.random.default_rng(0)
-        d = rng.integers(-1000, 1000, size=256 * 256).astype(np.int32)
-        stages = ["tiled_lorenzo:int32", token] if "adaptive_bitpack" in token else [token]
-        conns = ["s1 <- s0"] if "adaptive_bitpack" in token else []
-        comp = lp.PressioCompressor.from_config({
-            "compressor_id": "fzgpumodules",
-            "early_config": {"fzgpumodules:stages": stages, "fzgpumodules:connections": conns},
-        })
-        out = np.asarray(comp.decode(comp.encode(d), d.copy()))
-        check(f"{token} lossless round-trip", np.array_equal(d, out))
-    else:
-        ok, max_err, _ = roundtrip_ok({"early_config": {
-            "fzgpumodules:stages": [token], "fzgpumodules:connections": []}}, data)
-        check(f"{token} round-trip", ok, f"max_err={max_err}")
+# Integer pipeline through the stable stage catalog.
+rng = np.random.default_rng(0)
+d = rng.integers(-1000, 1000, size=256 * 256).astype(np.int32)
+comp = fzgm.Compressor.from_config({
+    "compressor_id": "fzgpumodules",
+    "early_config": {
+        "fzgpumodules:stages": ["tiled_lorenzo:int32", "adaptive_bitpack:int32"],
+        "fzgpumodules:connections": ["s1 <- s0"],
+    },
+})
+out = np.asarray(comp.decode(comp.encode(d), d.copy()))
+check("adaptive_bitpack:int32 lossless round-trip", np.array_equal(d, out))
 
 # ── Specialization / PREL / centering (new options this session)
 
-comp = lp.PressioCompressor.from_config({
+comp = fzgm.Compressor.from_config({
     "compressor_id": "fzgpumodules",
     "early_config": {"fzgpumodules:specialization": "auto"}})
 check("specialization=auto readback", comp.get_options()["fzgpumodules:specialization"] == "auto")
@@ -187,16 +170,15 @@ for policy in ("off", "auto"):
 
 # Confirm actual installation, including the lazily built inverse and option rebuild.
 for policy in ("off", "auto"):
-    comp = (lp.FZGPUModulesChain()
+    comp = (fzgm.Chain()
         .add("quantizer:float:uint32", linear_mode=True)
         .add("lorenzo:int32", from_port="codes", block_size=32)
         .add("adaptive_bitpack:int32", block_size=32)
-        .configure(memory_strategy="preallocate", specialization=policy)
-        .compressor(eb=1e-3))
+        .configure(eb=1e-3, memory_strategy="preallocate", specialization=policy))
     check(f"integer Lorenzo block_size {policy} readback",
           comp.get_options()["fzgpumodules:s1:block_size"] == 32)
     encoded = comp.encode(partial)
-    fresh_decoder = lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})
+    fresh_decoder = fzgm.Compressor.from_config({"compressor_id": "fzgpumodules"})
     fresh_result = np.asarray(fresh_decoder.decode(encoded))
     check(f"{policy} fresh decoder restores dtype/shape",
           fresh_result.dtype == partial.dtype and fresh_result.shape == partial.shape)
@@ -226,14 +208,14 @@ for policy in ("off", "auto"):
               np.abs(restored - partial).max() <= 1e-3 + 1e-6)
 
 try:
-    lp.PressioCompressor.from_config({
+    fzgm.Compressor.from_config({
         "compressor_id": "fzgpumodules",
         "early_config": {"fzgpumodules:specialization": "bogus"}})
     check("invalid specialization value rejected", False)
 except Exception:
     check("invalid specialization value rejected", True)
 
-comp = lp.PressioCompressor.from_config({"compressor_id": "fzgpumodules"})
+comp = fzgm.Compressor.from_config({"compressor_id": "fzgpumodules"})
 check("specialization replaces fusion in option discovery",
       "fzgpumodules:specialization" in comp.get_options() and "fzgpumodules:fusion" not in comp.get_options())
 for key, value in [("fzgpumodules:fusion", "auto"), ("fzgpumodules:specialization", 1)]:
@@ -249,7 +231,7 @@ for key, value in [("fzgpumodules:fusion", "auto"), ("fzgpumodules:specializatio
 # actually enforces.
 prel_frac = 1e-3
 prel_abs_bound = prel_frac * float(np.abs(data).max())
-comp = lp.PressioCompressor.from_config({
+comp = fzgm.Compressor.from_config({
     "compressor_id": "fzgpumodules",
     "early_config": {
         "fzgpumodules:stages": ["lorenzo:float:uint16", "rze"],
@@ -312,7 +294,7 @@ if _HAVE_CUDART:
         dev_in = _DeviceArray(d_in, h_in.shape, h_in.dtype)
         dev_out = _DeviceArray(d_out, h_in.shape, h_in.dtype)
 
-        comp = lp.PressioCompressor.from_config({
+        comp = fzgm.Compressor.from_config({
             "compressor_id": "fzgpumodules",
             "early_config": {
                 "fzgpumodules:stages": ["lorenzo:float:uint16", "rze"],

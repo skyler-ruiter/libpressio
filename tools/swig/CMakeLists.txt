@@ -6,6 +6,11 @@ if(SWIG_FOUND AND PYTHON3_FOUND)
   configure_file(libpressio.py libpressio.py COPYONLY)
 
 
+  if(LIBPRESSIO_HAS_FZGPUMODULES)
+    set(fzgm_python_module "${PROJECT_SOURCE_DIR}/src/plugins/compressors/fzgpumodules/libpressio_fzgpumodules.py")
+    configure_file("${fzgm_python_module}" libpressio_fzgpumodules.py COPYONLY)
+  endif()
+
   set(CMAKE_SWIG_FLAGS "-doxygen")
   if(NOT LIBPRESSIO_PYTHON_SITELIB)
     set(LIBPRESSIO_PYTHON_SITELIB ${Python3_SITELIB} CACHE PATH "path to install python libraries to")
@@ -46,5 +51,8 @@ if(SWIG_FOUND AND PYTHON3_FOUND)
 
   build_pressio_swig_module(pressio.i pypressio.h)
   install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/libpressio.py" DESTINATION ${LIBPRESSIO_PYTHON_SITELIB})
+  if(LIBPRESSIO_HAS_FZGPUMODULES)
+    install(FILES "${fzgm_python_module}" DESTINATION ${LIBPRESSIO_PYTHON_SITELIB})
+  endif()
 endif()
 

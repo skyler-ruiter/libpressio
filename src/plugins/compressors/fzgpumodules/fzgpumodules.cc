@@ -94,20 +94,6 @@ public:
         set(options, "fzgpumodules:memory_strategy",  map_keys(MEMORY_STRATEGIES));
         set(options, "fzgpumodules:error_bound_mode", map_keys(ERROR_BOUND_MODES));
         set(options, "fzgpumodules:specialization", map_keys(SPECIALIZATION_POLICIES));
-        std::vector<std::string> optional_stages;
-#if LIBPRESSIO_FZGM_HAS_SZX
-        optional_stages.emplace_back("szx");
-#endif
-#if LIBPRESSIO_FZGM_HAS_CDF97
-        optional_stages.emplace_back("cdf97");
-#endif
-#if LIBPRESSIO_FZGM_HAS_SPECK2D
-        optional_stages.emplace_back("speck2d");
-#endif
-#if LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
-        optional_stages.emplace_back("cdf97_outlier_correct");
-#endif
-        set(options, "fzgpumodules:optional_stages", optional_stages);
         set(options, "predictors:error_dependent",
             std::vector<std::string>{"fzgpumodules:stages", "fzgpumodules:connections"});
         set(options, "predictors:error_agnostic",
@@ -178,19 +164,9 @@ public:
             "Integer Lorenzo:   lorenzo:int8, lorenzo:int16, lorenzo:int32, lorenzo:int64.\n"
             "Tiled predictor:   tiled_lorenzo:int16, tiled_lorenzo:int32 (dimension-aware,\n"
             "                   separable Lorenzo; tile-major output for AdaptiveBitpack).\n"
-#if LIBPRESSIO_FZGM_HAS_SZX
-            "Optional lossy:    szx:float, szx:double (abs/noa error only).\n"
-#endif
-#if LIBPRESSIO_FZGM_HAS_SZP
-            "Legacy lossy:      szp:float, szp:double (abs/noa error only).\n"
-#endif
             "Adaptive Lorenzo:  adaptive_lorenzo:int16/32 (lossless, 1 in/3 out fwd).\n"
             "Interpolation:     ginterp (cuSZ-Hi interpolation, 2-D/3-D only, 1 in/4 out fwd).\n"
-            "Transforms:        zigzag:int8/16/32/64, negabinary:int8/16/32/64"
-#if LIBPRESSIO_FZGM_HAS_ADM
-            ", adm:uint16/uint32"
-#endif
-            ",\n"
+            "Transforms:        zigzag:int8/16/32/64, negabinary:int8/16/32/64,\n"
             "                   log_transform (float, exact point-wise rel bound, 1 in/4 out fwd).\n"
             "Difference:        diff:float, diff:double, diff:uint8/16/32, diff:int32/64,\n"
             "                   diff:int8:uint8, diff:int16:uint16, diff:int32:uint32, diff:int64:uint64.\n"
@@ -200,16 +176,6 @@ public:
             "Byte-level:        bitshuffle, gpulz, tupl, bitplane_rze (fixed uint16 input).\n"
             "Structural:        roibin_split:float/double (needs fzgpumodules:sN:peaks_file,\n"
             "                   1 in/3 out fwd).\n"
-#if LIBPRESSIO_FZGM_HAS_CDF97
-            "Optional transform: cdf97:float/double (CDF 9/7 DWT; coefficient-domain quantization).\n"
-#endif
-#if LIBPRESSIO_FZGM_HAS_SPECK2D
-            "Optional coder:    speck2d (2-D bit-plane coder).\n"
-#endif
-#if LIBPRESSIO_FZGM_HAS_CDF97_OUTLIER_CORRECT
-            "Optional correction: cdf97_outlier_correct (sparse correction against raw input;\n"
-            "                   requires an external input binding and matching bound).\n"
-#endif
             "The stages marked 'N in/M out fwd' above have a port count that swaps with\n"
             "direction (M in/N out on decompress) — Pipeline::buildInverseDAG() reconciles\n"
             "this transparently, nothing special to configure.\n"
