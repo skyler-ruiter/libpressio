@@ -10,7 +10,7 @@
 // Error bound modes:
 //   ErrorBoundMode_Abs, ErrorBoundMode_Noa, ErrorBoundMode_Rel
 // Pipeline options:
-//   NumStreams2, ZigzagCodes, GraphModeMultipleCompress
+//   NumStreams2, ZigzagCodes, MultipleCompressBeforeDecompress
 // Stage types:
 //   QuantizerFloatUint16, QuantizerFloatUint32, NewStageTokensCompileCheck, IntegerLorenzoLossless
 // Per-stage options:
@@ -488,9 +488,9 @@ TEST_F(FzgpuModulesTest, ZigzagCodes) {
     EXPECT_LE(max_err, eb + 1e-5);
 }
 
-// Compress N times without decompressing (CUDA graph captured on first call),
+// Compress N times without decompressing,
 // then decompress the last result and verify the error bound.
-TEST_F(FzgpuModulesTest, GraphModeMultipleCompress) {
+TEST_F(FzgpuModulesTest, MultipleCompressBeforeDecompress) {
     pressio_compressor comp = lib.get_compressor("fzgpumodules");
     ASSERT_TRUE(!!comp);
 
@@ -499,7 +499,6 @@ TEST_F(FzgpuModulesTest, GraphModeMultipleCompress) {
     opts.set("pressio:abs", eb);
     opts.set("fzgpumodules:stages",      std::vector<std::string>{"lorenzo:float:uint16", "rle:uint16"});
     opts.set("fzgpumodules:connections", std::vector<std::string>{"s1 <- s0:codes"});
-    opts.set("fzgpumodules:graph_mode",  true);
     { auto d = std::vector<size_t>{256, 256, 1}; opts.set("fzgpumodules:dims", pressio_data(d.begin(), d.end())); }
     ASSERT_EQ(comp->set_options(opts), 0) << comp->error_msg();
 

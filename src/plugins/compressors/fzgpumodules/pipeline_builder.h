@@ -54,14 +54,6 @@ inline void configure_pipeline_base(fz::Pipeline& p,
     p.setSpecializationPolicy(specialization_policy);
 }
 
-// Run warmup + graph capture after finalize(), if graph_mode is set.
-inline void maybe_capture_graph(fz::Pipeline& p, cudaStream_t stream, bool graph_mode) {
-    if (graph_mode) {
-        p.warmup(stream);
-        p.captureGraph(stream);
-    }
-}
-
 inline pressio_dtype fz_to_pressio_dtype(fz::DataType dt) {
     switch (dt) {
         case fz::DataType::UINT8:   return pressio_uint8_dtype;
@@ -78,22 +70,13 @@ inline pressio_dtype fz_to_pressio_dtype(fz::DataType dt) {
     }
 }
 
-inline PipelineState build_manual_pipeline(Configuration& config, size_t data_size, cudaStream_t stream) {
+inline PipelineState build_manual_pipeline(Configuration& config, size_t data_size) {
     PipelineState state;
     std::vector<ParsedConnection> connections;
     connections.reserve(config.connections.size());
     for(const auto& text : config.connections) connections.push_back(parse_connection(text));
 
-    if (config.graph_mode) {
-        for (auto& tok : config.stages)
-            if (token_kind(tok) == "rze")
-                throw std::runtime_error(
-                    "fzgpumodules:graph_mode=true is incompatible with the rze stage");
-    }
-
-    fz::MemoryStrategy strategy = config.graph_mode
-        ? fz::MemoryStrategy::PREALLOCATE
-        : MEMORY_STRATEGIES.at(config.memory_strategy);
+    const auto strategy = MEMORY_STRATEGIES.at(config.memory_strategy);
 
     state.ptr = std::make_unique<fz::Pipeline>(data_size, strategy, static_cast<float>(config.memory_multiplier));
     const std::array<size_t,3> fz_dims = {config.dims[0], config.dims[1], config.dims[2]};
@@ -160,36 +143,26 @@ inline PipelineState build_manual_pipeline(Configuration& config, size_t data_si
         }
     }
 
-    if (config.graph_mode)
-        state.ptr->enableGraphMode(true);
-
     state.ptr->finalize();
-    maybe_capture_graph(*state.ptr, stream, config.graph_mode);
     return state;
 }
 
-inline PipelineState build_config_pipeline(const Configuration& config, cudaStream_t stream) {
+inline PipelineState build_config_pipeline(const Configuration& config) {
     PipelineState state;
-    fz::MemoryStrategy strategy = config.graph_mode
-        ? fz::MemoryStrategy::PREALLOCATE
-        : MEMORY_STRATEGIES.at(config.memory_strategy);
+    const auto strategy = MEMORY_STRATEGIES.at(config.memory_strategy);
 
     state.ptr = std::make_unique<fz::Pipeline>(0, strategy, static_cast<float>(config.memory_multiplier));
     configure_pipeline_base(*state.ptr, nullptr, static_cast<int>(config.num_streams), SPECIALIZATION_POLICIES.at(config.specialization));
 
-    if (config.graph_mode)
-        state.ptr->enableGraphMode(true);
-
     state.ptr->loadConfig(config.config_file);  // adds stages, wires, and finalizes
-    maybe_capture_graph(*state.ptr, stream, config.graph_mode);
     return state;
 }
 
 
 // Publish only a fully constructed pipeline; failed construction leaves live state intact.
-inline PipelineState build_encoder(Configuration& config, size_t data_size, cudaStream_t stream) {
-    auto state = config.config_file.empty() ? build_manual_pipeline(config, data_size, stream)
-                                          : build_config_pipeline(config, stream);
+inline PipelineState build_encoder(Configuration& config, size_t data_size) {
+    auto state = config.config_file.empty() ? build_manual_pipeline(config, data_size)
+                                          : build_config_pipeline(config);
     state.dirty = false;
     state.last_size = data_size;
     return state;

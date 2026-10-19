@@ -39,6 +39,15 @@ class ConfigurationTests(unittest.TestCase):
                     "fzgpumodules:stages": ["bitshuffle"],
                     "fzgpumodules:connections": [], "fzgpumodules:"+key: value})
 
+    def test_graph_capture_option_is_removed(self):
+        self.assertNotIn("fzgpumodules:graph_mode", self.comp.get_options())
+        self.assertNotIn("fzgpumodules:graph_mode", self.comp.get_documentation())
+        for value in (True, False, "true"):
+            with self.subTest(value=value):
+                self.assert_rollback({"pressio:abs": 0.25, "fzgpumodules:graph_mode": value})
+        with self.assertRaisesRegex(lp.PressioException, "graph_mode was removed"):
+            fzgm.Chain().add("bitshuffle").configure(graph_mode=True)
+
     def test_rollback_after_earlier_stage_parameter_changed(self):
         self.assert_rollback({"pressio:abs": 0.25,
                               "fzgpumodules:s0:dither_seed": 42,
@@ -49,7 +58,7 @@ class ConfigurationTests(unittest.TestCase):
                            ("memory_multiplier", float("nan")), ("memory_multiplier", -1.0), ("memory_multiplier", 1e300),
                            ("dims", np.array([-1, 1, 1], dtype=np.int64)),
                            ("dims", np.array([1.5, 1, 1], dtype=np.float64)),
-                           ("graph_mode", "true"), ("dims", "invalid")):
+                           ("dims", "invalid")):
             with self.subTest(key=key):
                 self.assert_rollback({"pressio:abs": 0.25, "fzgpumodules:"+key: value})
         for bound in (-1.0, float("inf")):

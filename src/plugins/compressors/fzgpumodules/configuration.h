@@ -50,7 +50,6 @@ struct PipelineOptions {
     // Empty selects the sole/first source; multi-source pipelines should set an id.
     std::string primary_source;
     std::string config_file;
-    bool graph_mode = false;
     bool expose_stage_outputs = false;
 
     bool operator==(const PipelineOptions&) const = default;
@@ -152,7 +151,9 @@ struct Configuration : PipelineOptions {
 
         read_option(options, "fzgpumodules:num_streams", &num_streams);
 
-        read_option(options, "fzgpumodules:graph_mode", &graph_mode);
+        bool removed_graph_mode;
+        if (get(options, "fzgpumodules:graph_mode", &removed_graph_mode) != pressio_options_key_does_not_exist)
+            throw std::invalid_argument("fzgpumodules:graph_mode was removed; CUDA Graph capture is not supported by this plugin");
 
         std::string removed_fusion;
         if (get(options, "fzgpumodules:fusion", &removed_fusion) != pressio_options_key_does_not_exist)

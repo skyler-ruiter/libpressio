@@ -75,16 +75,15 @@ public:
         opts.set("fzgpumodules:" + sid + ":quant_radius",
             std::string("0 = auto-tune (default): on first execute() the stage scans the input "
             "min/max and picks the largest radius that fits the data range. >0 = manual: use "
-            "this radius directly, skip the scan (required for CUDA graph capture)."));
+            "this radius directly and skip the scan."));
         opts.set("fzgpumodules:" + sid + ":outlier_capacity",
             std::string("Outlier buffer reserve as fraction of total elements (default 0.10)"));
         opts.set("fzgpumodules:" + sid + ":auto_tuning_mode",
             std::string("INTERPOLATION_PARAMS auto-tuning (cuSZ-Hi): 0 = off (default, "
             "deterministic baseline), 1 = cheap profiling (~1ms, 3-D only), 3 = full "
             "structural profiling (~5-15ms, 3-D only), 4 = full + alpha/beta sweep "
-            "(~15-30ms, 3-D only), 5 = manual alpha/beta override (dim-agnostic, graph-safe). "
-            "Modes 1/3/4 force a host-blocking D2H sync and are incompatible with CUDA graph "
-            "capture; on 2-D input they fall back to baseline."));
+            "(~15-30ms, 3-D only), 5 = manual alpha/beta override (dim-agnostic). "
+            "Modes 1/3/4 force a host-blocking D2H sync; on 2-D input they fall back to baseline."));
         opts.set("fzgpumodules:" + sid + ":manual_alpha",
             std::string("Manual alpha for auto_tuning_mode=5; >0 uses it verbatim, 0.0 (default) "
             "defers to the cuSZ-Hi piecewise-linear schedule keyed on the relative error bound"));

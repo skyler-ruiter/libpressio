@@ -69,7 +69,6 @@ public:
         set(options, "fzgpumodules:error_bound_mode",  config_.error_bound_mode);
         set(options, "fzgpumodules:dims", pressio_data(config_.dims.begin(), config_.dims.end()));
         set(options, "fzgpumodules:num_streams", config_.num_streams);
-        set(options, "fzgpumodules:graph_mode",  config_.graph_mode);
         set(options, "fzgpumodules:specialization", config_.specialization);
         set(options, "fzgpumodules:stages",               config_.stages);
         set(options, "fzgpumodules:connections",          config_.connections);
@@ -142,18 +141,10 @@ public:
             "Spatial dimensions [x, y, z] (x = fast). Default {0,1,1} infers 1-D from input size.");
         set(options, "fzgpumodules:num_streams",
             "Number of parallel CUDA streams (default: 1)");
-        set(options, "fzgpumodules:graph_mode",
-            "Enable CUDA Graph capture for repeated compression (default: false). "
-            "Eliminates per-call CPU dispatch overhead after a one-time warmup+capture on "
-            "the first compress() call. Requires memory_strategy=preallocate. "
-            "Incompatible with rze stage. "
-            "Each encode copies its result into a self-contained archive. A fresh decoder can "
-            "read that archive in another process with a compatible SDK. Decode reconstructs "
-            "a pipeline from the archive and does not use CUDA Graph capture.");
         set(options, "fzgpumodules:specialization",
             "Pipeline Specialization policy: off (default) or auto. Auto installs admitted "
             "implementations for supported stage combinations and otherwise uses staged execution. "
-            "It is not a per-input profitability predictor and is mutually exclusive with CUDA Graph mode. "
+            "It is not a per-input profitability predictor. "
             "FZ_SPECIALIZE overrides the policy at pipeline-build time. "
             "Inspect config_.specialization* metrics after encode/decode to confirm installation. "
             "Use fzgpumodules:specialization in Python and C++ configurations.");
@@ -201,7 +192,7 @@ public:
             "Path to a TOML pipeline config file. When non-empty, the file is the source of "
             "truth for stages, connections, dims, and per-stage error bounds. Options "
             "fzgpumodules:stages, fzgpumodules:connections, fzgpumodules:dims, and pressio:abs "
-            "are ignored. fzgpumodules:graph_mode, fzgpumodules:num_streams, and "
+            "are ignored. fzgpumodules:num_streams and "
             "fzgpumodules:memory_multiplier may still be set via libpressio options. "
             "Per-stage outlier_count metrics are not available in config-file mode. "
             "Set to empty string to revert to the stages/connections API. "
@@ -345,7 +336,7 @@ private:
         last_rebuilt_ = need_rebuild;
         if(need_rebuild) {
             try {
-                state_ = build_encoder(config_, data_size, stream_);
+                state_ = build_encoder(config_, data_size);
             } catch(std::exception const& ex) {
                 return set_error(3, std::string("Pipeline construction failed: ") + ex.what());
             }
